@@ -1,0 +1,217 @@
+package vn.inventoryai.report;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+import vn.inventoryai.common.security.SecurityUtils;
+import vn.inventoryai.inventory.StockTransaction;
+import vn.inventoryai.inventory.StockTransactionRepository;
+import vn.inventoryai.inventory.WasteRecord;
+import vn.inventoryai.inventory.WasteRecordRepository;
+import vn.inventoryai.report.dto.AuditLogResponse;
+import vn.inventoryai.report.dto.StockTransactionResponse;
+import vn.inventoryai.report.dto.WasteDashboardResponse;
+import vn.inventoryai.report.dto.WasteRecordResponse;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/reports")
+@RequiredArgsConstructor
+public class ReportController {
+    private final StockTransactionRepository transactionRepository;
+    private final WasteRecordRepository wasteRecordRepository;
+
+    @GetMapping("/waste")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    List<WasteRecordResponse> waste(
+            @RequestParam(required = false) LocalDate startDate,
+            @RequestParam(required = false) LocalDate endDate
+    ) {
+        Long storeId = SecurityUtils.storeId();
+        Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return wasteRecordRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end)
+                .stream()
+                .map(this::toWasteResponse)
+                .toList();
+    }
+
+    @GetMapping("/waste/export")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    ResponseEntity<String> exportWaste(
+            @RequestParam(required = false) LocalDate startDate,
+            @RequestParam(required = false) LocalDate endDate
+    ) {
+        StringBuilder csv = new StringBuilder("createdAt,store,ingredient,batch,quantity,unit,reason,estimatedCost,recordedBy\n");
+        waste(startDate, endDate).forEach(w -> csv.append(w.createdAt()).append(',')
+                .append(SecurityUtils.storeId()).append(',')
+                .append(w.ingredientId()).append(',')
+                .append(w.batchId() == null ? "" : w.batchId()).append(',')
+                .append(w.quantity()).append(',')
+                .append("").append(',')
+                .append(w.reason()).append(',')
+                .append(w.estimatedCost()).append(',')
+                .append(w.recordedBy() == null ? "" : w.recordedBy()).append('\n'));
+        return csv("waste-report.csv", csv.toString());
+    }
+
+    @GetMapping("/inventory/export")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    ResponseEntity<String> exportInventory(
+            @RequestParam(required = false) LocalDate startDate,
+            @RequestParam(required = false) LocalDate endDate
+    ) {
+        Long storeId = SecurityUtils.storeId();
+        Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        StringBuilder csv = new StringBuilder("createdAt,store,ingredient,batch,type,reason,quantity,unitCost,recordedBy\n");
+        transactionRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end).forEach(tx -> csv.append(tx.getCreatedAt()).append(',')
+                .append(tx.getStore().getName()).append(',')
+                .append(tx.getIngredient().getName()).append(',')
+                .append(tx.getBatch() == null ? "" : tx.getBatch().getBatchNumber()).append(',')
+                .append(tx.getType().name()).append(',')
+                .append(tx.getReason()).append(',')
+                .append(tx.getQuantity()).append(',')
+                .append(tx.getUnitCost()).append(',')
+                .append(tx.getCreatedBy().getEmail()).append('\n'));
+        return csv("inventory-transactions.csv", csv.toString());
+    }
+
+    @GetMapping("/waste/dashboard")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    WasteDashboardResponse wasteDashboard(@RequestParam(defaultValue = "month") String period) {
+        Long storeId = SecurityUtils.storeId();
+        LocalDate now = LocalDate.now(ZoneOffset.UTC);
+        LocalDate currentStart = "week".equals(period) ? now.minusDays(6) : now.withDayOfMonth(1);
+        LocalDate previousStart = "week".equals(period) ? currentStart.minusDays(7) : currentStart.minusMonths(1);
+        LocalDate previousEnd = currentStart.minusDays(1);
+
+        List<WasteRecord> current = wasteRecordRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(
+                storeId,
+                currentStart.atStartOfDay().toInstant(ZoneOffset.UTC),
+                now.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+        );
+        List<WasteRecord> previous = wasteRecordRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(
+                storeId,
+                previousStart.atStartOfDay().toInstant(ZoneOffset.UTC),
+                previousEnd.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+        );
+
+        BigDecimal currentCost = sumWaste(current);
+        BigDecimal previousCost = sumWaste(previous);
+        BigDecimal change = previousCost.signum() == 0
+                ? BigDecimal.ZERO
+                : currentCost.subtract(previousCost).multiply(BigDecimal.valueOf(100)).divide(previousCost, 2, RoundingMode.HALF_UP);
+
+        Map<Long, WasteDashboardResponse.TopWasteIngredient> grouped = new LinkedHashMap<>();
+        for (WasteRecord record : current) {
+            WasteDashboardResponse.TopWasteIngredient existing = grouped.get(record.getIngredient().getId());
+            BigDecimal quantity = existing == null ? record.getQuantity() : existing.quantity().add(record.getQuantity());
+            BigDecimal cost = existing == null ? record.getEstimatedCost() : existing.estimatedCost().add(record.getEstimatedCost());
+            grouped.put(record.getIngredient().getId(), new WasteDashboardResponse.TopWasteIngredient(
+                    record.getIngredient().getId(),
+                    record.getIngredient().getName(),
+                    record.getIngredient().getUnit(),
+                    quantity,
+                    cost
+            ));
+        }
+
+        List<WasteDashboardResponse.TopWasteIngredient> top = grouped.values().stream()
+                .sorted(Comparator.comparing(WasteDashboardResponse.TopWasteIngredient::estimatedCost).reversed())
+                .limit(5)
+                .toList();
+        return new WasteDashboardResponse(period, currentCost, previousCost, change, top);
+    }
+
+    @GetMapping("/audit-log")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    List<AuditLogResponse> auditLog(
+            @RequestParam(required = false) LocalDate startDate,
+            @RequestParam(required = false) LocalDate endDate
+    ) {
+        Long storeId = SecurityUtils.storeId();
+        Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return transactionRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end)
+                .stream()
+                .map(tx -> new AuditLogResponse(
+                        tx.getId(),
+                        tx.getCreatedAt(),
+                        tx.getStore().getId(),
+                        tx.getStore().getName(),
+                        tx.getIngredient().getId(),
+                        tx.getIngredient().getName(),
+                        tx.getBatch() == null ? "" : tx.getBatch().getBatchNumber(),
+                        tx.getType().name(),
+                        tx.getReason(),
+                        tx.getQuantity(),
+                        tx.getIngredient().getUnit(),
+                        tx.getCreatedBy().getEmail()
+                ))
+                .toList();
+    }
+
+    @GetMapping("/transactions")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
+    List<StockTransactionResponse> transactions() {
+        Long storeId = SecurityUtils.storeId();
+        return transactionRepository.findAll().stream()
+                .filter(tx -> tx.getStore().getId().equals(storeId))
+                .map(tx -> new StockTransactionResponse(
+                        tx.getId(),
+                        storeId,
+                        StockTransactionResponse.legacyType(tx.getType()),
+                        tx.getReason(),
+                        tx.getCreatedAt(),
+                        tx.getCreatedBy().getEmail(),
+                        List.of(new StockTransactionResponse.Item(
+                                tx.getIngredient().getId(),
+                                tx.getBatch() == null ? "" : tx.getBatch().getBatchNumber(),
+                                tx.getBatch() == null ? null : tx.getBatch().getId(),
+                                tx.getQuantity(),
+                                tx.getBatch() == null ? null : tx.getBatch().getExpiryDate(),
+                                tx.getUnitCost()
+                        ))
+                ))
+                .toList();
+    }
+
+    private WasteRecordResponse toWasteResponse(WasteRecord w) {
+        return new WasteRecordResponse(
+                w.getId(),
+                w.getStore().getId(),
+                w.getIngredient().getId(),
+                w.getBatch() == null ? null : w.getBatch().getId(),
+                w.getQuantity(),
+                w.getReason(),
+                w.getEstimatedCost(),
+                w.getCreatedBy() == null ? null : w.getCreatedBy().getEmail(),
+                w.getCreatedAt()
+        );
+    }
+
+    private BigDecimal sumWaste(List<WasteRecord> records) {
+        return records.stream().map(WasteRecord::getEstimatedCost).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private ResponseEntity<String> csv(String filename, String content) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .header("Content-Disposition", "attachment; filename=" + filename)
+                .body(content);
+    }
+}

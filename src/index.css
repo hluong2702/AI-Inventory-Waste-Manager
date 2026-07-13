@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Be Vietnam Pro", ui-sans-serif, system-ui, sans-serif;
+
+  --color-sage: #8A9A7E;
+  --color-sage-dark: #5C6B4F;
+  --color-terracotta: #C97B4A;
+  --color-offwhite: #F7F3EC;
+  --color-ink: #3A3A34;
+}
+
+/* ==========================================
+   BASE STYLES
+   ========================================== */
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-offwhite);
+  color: var(--color-ink);
+}
+
+/* ==========================================
+   CUSTOM SCROLLBAR
+   ========================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(58, 58, 52, 0.15);
+  border-radius: 100px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(58, 58, 52, 0.3);
+}
+
+/* Sidebar scrollbar dark variant */
+aside ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+aside ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ==========================================
+   CUSTOM ANIMATIONS
+   ========================================== */
+
+/* Fade in for modals */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Scale up for modal content */
+@keyframes scaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Slide down for accordion / expand */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fade up for page entry */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 200ms ease-out both;
+}
+
+.animate-scale-up {
+  animation: scaleUp 250ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-slide-down {
+  animation: slideDown 200ms ease-out both;
+}
+
+.animate-fade-up {
+  animation: fadeUp 400ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* ==========================================
+   FOCUS STYLES
+   ========================================== */
+*:focus-visible {
+  outline: 2px solid var(--color-sage);
+  outline-offset: 2px;
+}
+
+/* ==========================================
+   SELECTION
+   ========================================== */
+::selection {
+  background-color: rgba(138, 154, 126, 0.25);
+}

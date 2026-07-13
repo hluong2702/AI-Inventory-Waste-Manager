@@ -1,0 +1,16 @@
+package vn.inventoryai.common.error;
+
+public enum ErrorCode {
+    UNAUTHORIZED,
+    FORBIDDEN,
+    VALIDATION_ERROR,
+    NOT_FOUND,
+    EMAIL_ALREADY_EXISTS,
+    BAD_CREDENTIALS,
+    USER_DISABLED,
+    MUST_CHANGE_PASSWORD,
+    STORE_MISMATCH,
+    PLAN_LIMIT_EXCEEDED,
+    INSUFFICIENT_STOCK,
+    TOKEN_INVALID
+}

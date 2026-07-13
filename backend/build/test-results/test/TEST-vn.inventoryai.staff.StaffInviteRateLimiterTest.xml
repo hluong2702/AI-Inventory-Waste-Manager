@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="vn.inventoryai.staff.StaffInviteRateLimiterTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-07-12T18:57:23.368Z" hostname="bibabibo-2.local" time="0.123">
+  <properties/>
+  <testcase name="fallsBackToInMemoryCounterWhenRedisUnavailable()" classname="vn.inventoryai.staff.StaffInviteRateLimiterTest" time="0.123"/>
+  <system-out><![CDATA[01:57:23.487 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+01:57:23.490 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+01:57:23.490 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+01:57:23.490 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+01:57:23.491 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+01:57:23.491 [Test worker] WARN vn.inventoryai.staff.StaffInviteRateLimiter -- Redis unavailable for staff invite rate limit, falling back to memory: redis down
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -57,7 +57,7 @@ public class InventoryService {
 
     @Transactional
     public StockTransactionResponse createTransaction(CreateInventoryTransactionRequest request) {
-        if ("IMPORT".equals(request.type())) {
+        if (request.type() == CreateInventoryTransactionRequest.TransactionType.IMPORT) {
             return importTransaction(request);
         }
         return exportTransaction(request);
@@ -80,10 +80,10 @@ public class InventoryService {
             batch.setCostPerUnit(unitCost);
             batch = batchRepository.save(batch);
             ingredient.setUnitCost(unitCost);
-            last = transactionRepository.save(createTransaction(ingredient, batch, StockTransactionType.IN, item.quantity(), request.reason(), unitCost, null));
+            last = transactionRepository.save(createTransaction(ingredient, batch, StockTransactionType.IN, item.quantity(), request.reason().name(), unitCost, null));
             items.add(new StockTransactionResponse.Item(ingredient.getId(), batch.getBatchNumber(), batch.getId(), item.quantity(), batch.getExpiryDate(), unitCost));
         }
-        return toStockResponse(last, "IMPORT", request.reason(), items);
+        return toStockResponse(last, "IMPORT", request.reason().name(), items);
     }
 
     private StockTransactionResponse exportTransaction(CreateInventoryTransactionRequest request) {
@@ -91,13 +91,13 @@ public class InventoryService {
         StockTransaction last = null;
         for (CreateInventoryTransactionRequest.Item item : request.items()) {
             Ingredient ingredient = currentStoreIngredient(item.ingredientId());
-            List<ExportAllocation> exported = exportIngredient(ingredient, item.quantity(), request.reason(), request.wasteReason());
+            List<ExportAllocation> exported = exportIngredient(ingredient, item.quantity(), request.reason().name(), request.wasteReason());
             items.addAll(exported.stream().map(ExportAllocation::item).toList());
             if (!exported.isEmpty()) {
                 last = exported.get(exported.size() - 1).transaction();
             }
         }
-        return toStockResponse(last, "EXPORT", request.reason(), items);
+        return toStockResponse(last, "EXPORT", request.reason().name(), items);
     }
 
     private List<ExportAllocation> exportIngredient(Ingredient ingredient, BigDecimal quantity, String reason, String wasteReason) {

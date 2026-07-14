@@ -3,6 +3,8 @@ package vn.inventoryai.admin;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.transaction.annotation.Transactional;
 import vn.inventoryai.admin.dto.*;
 import vn.inventoryai.auth.UserRepository;
@@ -67,8 +69,8 @@ public class AdminService {
     }
 
     @Transactional(readOnly = true)
-    public List<AdminUserResponse> users() {
-        return userRepository.findAll().stream()
+    public Page<AdminUserResponse> users(Pageable pageable) {
+        return userRepository.findAll(pageable)
                 .map(user -> new AdminUserResponse(
                         user.getId(),
                         user.getStore() == null ? null : user.getStore().getId(),
@@ -77,23 +79,22 @@ public class AdminService {
                         user.getFullName(),
                         user.getRole(),
                         user.getStatus()
-                ))
-                .toList();
+                ));
     }
 
     @Transactional(readOnly = true)
-    public List<AdminStoreResponse> stores(SubscriptionPlan plan, StoreStatus status) {
-        List<Store> stores;
+    public Page<AdminStoreResponse> stores(SubscriptionPlan plan, StoreStatus status, Pageable pageable) {
+        Page<Store> stores;
         if (plan != null && status != null) {
-            stores = storeRepository.findBySubscriptionPlanAndStatus(plan, status);
+            stores = storeRepository.findBySubscriptionPlanAndStatus(plan, status, pageable);
         } else if (plan != null) {
-            stores = storeRepository.findBySubscriptionPlan(plan);
+            stores = storeRepository.findBySubscriptionPlan(plan, pageable);
         } else if (status != null) {
-            stores = storeRepository.findByStatus(status);
+            stores = storeRepository.findByStatus(status, pageable);
         } else {
-            stores = storeRepository.findAll();
+            stores = storeRepository.findAll(pageable);
         }
-        return stores.stream().map(this::toResponse).toList();
+        return stores.map(this::toResponse);
     }
 
     @Transactional

@@ -4,6 +4,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import vn.inventoryai.inventory.dto.InventoryInRequest;
 import vn.inventoryai.inventory.dto.InventoryBatchResponse;
 import vn.inventoryai.inventory.dto.InventoryOutRequest;
@@ -37,10 +39,9 @@ public class InventoryController {
 
     @GetMapping("/batches")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
-    List<InventoryBatchResponse> batches() {
+    Page<InventoryBatchResponse> batches(Pageable pageable) {
         Long storeId = vn.inventoryai.common.security.SecurityUtils.storeId();
-        return batchRepository.findAll().stream()
-                .filter(batch -> batch.getStore().getId().equals(storeId))
+        return batchRepository.findByStoreId(storeId, pageable)
                 .map(batch -> new InventoryBatchResponse(
                         batch.getId(),
                         storeId,
@@ -50,8 +51,7 @@ public class InventoryController {
                         batch.getExpiryDate(),
                         batch.getReceivedAt(),
                         batch.getCostPerUnit()
-                ))
-                .toList();
+                ));
     }
 
     @PostMapping("/transactions")

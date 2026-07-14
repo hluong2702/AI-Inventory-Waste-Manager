@@ -1,7 +1,10 @@
 package vn.inventoryai.inventory;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import vn.inventoryai.common.enums.StockTransactionType;
 
 import java.math.BigDecimal;
@@ -32,4 +35,13 @@ public interface StockTransactionRepository extends JpaRepository<StockTransacti
     Optional<StockTransaction> findTopByStoreIdOrderByCreatedAtDesc(Long storeId);
 
     List<StockTransaction> findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(Long storeId, Instant start, Instant end);
+
+    @EntityGraph(attributePaths = {"store", "ingredient", "batch", "createdBy"})
+    List<StockTransaction> findByStoreIdOrderByCreatedAtDesc(Long storeId);
+
+    @EntityGraph(attributePaths = {"store", "ingredient", "batch", "createdBy"})
+    Page<StockTransaction> findByStoreId(Long storeId, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"store", "ingredient", "batch", "createdBy"})
+    Page<StockTransaction> findByStoreIdAndCreatedAtBetween(Long storeId, Instant start, Instant end, Pageable pageable);
 }

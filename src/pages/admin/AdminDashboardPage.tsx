@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../../api/client'
-import type { ApiResponse } from '../../types'
+import type { AdminStore, ApiResponse, PageResponse } from '../../types'
 import { 
   Buildings, 
   Users, 
@@ -19,13 +19,6 @@ interface AdminStats {
   totalWasteCost: number
 }
 
-interface StoreWithStats {
-  id: number
-  name: number
-  address: string
-  phone: string
-}
-
 export default function AdminDashboardPage() {
   const navigate = useNavigate()
 
@@ -42,13 +35,13 @@ export default function AdminDashboardPage() {
   const { data: storesResponse } = useQuery({
     queryKey: ['admin-stores'],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<StoreWithStats[]>>('/admin/stores')
+      const res = await apiClient.get<ApiResponse<PageResponse<AdminStore>>>('/admin/stores?page=0&size=10&sort=createdAt,desc')
       return res.data
     }
   })
 
   const stats = statsResponse?.data
-  const stores = storesResponse?.data ?? []
+  const stores = storesResponse?.data.content ?? []
 
   const kpiCards = [
     {
@@ -140,7 +133,7 @@ export default function AdminDashboardPage() {
         </div>
 
         <div className="divide-y divide-white/5">
-          {stores.slice(0, 5).map((store: any) => (
+          {stores.slice(0, 5).map((store) => (
             <div key={store.id} className="px-6 py-4 flex items-center justify-between hover:bg-white/5 transition-colors">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-[10px] font-bold text-white/60">
@@ -148,7 +141,7 @@ export default function AdminDashboardPage() {
                 </div>
                 <div>
                   <div className="text-sm font-medium text-white">{store.name}</div>
-                  <div className="text-[10px] text-white/40 mt-0.5">{store.address}</div>
+                  <div className="text-[10px] text-white/40 mt-0.5">{store.address ?? 'Chưa cập nhật địa chỉ'}</div>
                 </div>
               </div>
               <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">

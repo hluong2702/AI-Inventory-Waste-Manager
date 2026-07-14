@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../../api/client'
-import type { ApiResponse, Role } from '../../types'
+import type { AdminUser, ApiResponse, BackendRole, PageResponse } from '../../types'
+import Pagination from '../../components/Pagination'
 import { 
   MagnifyingGlass, 
   Users, 
@@ -10,47 +11,47 @@ import {
   UserCircle
 } from '@phosphor-icons/react'
 
-interface AdminUser {
-  id: number
-  username: string
-  role: Role
-  fullName: string
-}
-
-const roleLabel: Record<Role, string> = {
+const roleLabel: Record<BackendRole, string> = {
   SYSTEM_ADMIN: 'Admin',
-  STORE_OWNER: 'Chủ quán',
+  OWNER: 'Chủ quán',
   MANAGER: 'Quản lý',
   STAFF: 'Nhân viên'
 }
 
-const roleBadgeClass: Record<Role, string> = {
+const roleBadgeClass: Record<BackendRole, string> = {
   SYSTEM_ADMIN: 'bg-red-500/10 text-red-400 border-red-500/20',
-  STORE_OWNER: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  OWNER: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   MANAGER: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
   STAFF: 'bg-white/5 text-white/40 border-white/10'
 }
 
-const roleIcon: Record<Role, typeof ShieldCheck> = {
+const roleIcon: Record<BackendRole, typeof ShieldCheck> = {
   SYSTEM_ADMIN: ShieldCheck,
-  STORE_OWNER: UserCircle,
+  OWNER: UserCircle,
   MANAGER: UserCircle,
   STAFF: UserIcon
 }
 
+const unknownRoleBadgeClass = 'bg-white/5 text-white/40 border-white/10'
+
+function isBackendRole(role: string): role is BackendRole {
+  return role === 'SYSTEM_ADMIN' || role === 'OWNER' || role === 'MANAGER' || role === 'STAFF'
+}
+
 export default function AdminUsersPage() {
   const [search, setSearch] = useState('')
-  const [filterRole, setFilterRole] = useState<'ALL' | Role>('ALL')
+  const [filterRole, setFilterRole] = useState<'ALL' | BackendRole>('ALL')
+  const [page, setPage] = useState(0)
 
   // Tải tất cả users toàn hệ thống
   const { data: response, isLoading } = useQuery({
-    queryKey: ['admin-users'],
+    queryKey: ['admin-users', page],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<AdminUser[]>>('/admin/users')
+      const res = await apiClient.get<ApiResponse<PageResponse<AdminUser>>>(`/admin/users?page=${page}&size=10&sort=id,desc`)
       return res.data
     }
   })
-  const users = response?.data ?? []
+  const users = response?.data.content ?? []
 
   const filtered = users.filter(u => {
     const matchSearch = 
@@ -70,7 +71,7 @@ export default function AdminUsersPage() {
         </div>
         <h2 className="text-2xl font-bold text-white tracking-tight">Quản lý người dùng hệ thống</h2>
         <p className="text-xs text-white/40 mt-1">
-          Tổng cộng <span className="text-white font-bold">{users.length}</span> tài khoản đã đăng ký.
+          Tổng cộng <span className="text-white font-bold">{response?.data.totalElements ?? 0}</span> tài khoản đã đăng ký.
         </p>
       </div>
 
@@ -88,7 +89,7 @@ export default function AdminUsersPage() {
         </div>
 
         <div className="flex bg-white/5 border border-white/10 p-1 rounded-xl gap-1">
-          {(['ALL', 'SYSTEM_ADMIN', 'STORE_OWNER', 'MANAGER', 'STAFF'] as const).map((r) => (
+          {(['ALL', 'SYSTEM_ADMIN', 'OWNER', 'MANAGER', 'STAFF'] as const).map((r) => (
             <button
               key={r}
               onClick={() => setFilterRole(r)}
@@ -132,7 +133,10 @@ export default function AdminUsersPage() {
               </tr>
             ) : (
               filtered.map((user) => {
-                const Icon = roleIcon[user.role]
+                const knownRole = isBackendRole(user.role) ? user.role : null
+                const Icon = knownRole ? roleIcon[knownRole] : UserIcon
+                const label = knownRole ? roleLabel[knownRole] : `Không xác định (${user.role || 'N/A'})`
+                const badgeClass = knownRole ? roleBadgeClass[knownRole] : unknownRoleBadgeClass
                 return (
                   <tr key={user.id} className="hover:bg-white/5 transition-colors">
                     <td className="px-6 py-4">
@@ -148,9 +152,9 @@ export default function AdminUsersPage() {
                     </td>
                     <td className="px-6 py-4 font-mono text-white/50">@{user.username}</td>
                     <td className="px-6 py-4 text-center">
-                      <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border ${roleBadgeClass[user.role]}`}>
+                      <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border ${badgeClass}`}>
                         <Icon size={9} />
-                        {roleLabel[user.role]}
+                        {label}
                       </span>
                     </td>
                   </tr>
@@ -160,6 +164,7 @@ export default function AdminUsersPage() {
           </tbody>
         </table>
       </div>
+      <Pagination dark page={page} totalPages={response?.data.totalPages ?? 0} totalElements={response?.data.totalElements ?? 0} onPageChange={setPage} />
     </div>
   )
 }

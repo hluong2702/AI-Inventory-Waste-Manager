@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, WasteRecord, Ingredient, WasteDashboard, AuditLog } from '../types'
+import type { ApiResponse, WasteRecord, Ingredient, WasteDashboard, AuditLog, PageResponse } from '../types'
+import Pagination from '../components/Pagination'
 import { useStore } from '../context/StoreContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
 import StateView from '../components/StateView'
@@ -47,6 +48,8 @@ export default function ReportsPage() {
   const defaultStartDate = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const [startDate, setStartDate] = useState(defaultStartDate)
   const [endDate, setEndDate] = useState(defaultEndDate)
+  const [wastePage, setWastePage] = useState(0)
+  const [auditPage, setAuditPage] = useState(0)
 
   // 1. Tải danh sách nguyên liệu
   const { data: ingResponse } = useQuery({
@@ -60,16 +63,16 @@ export default function ReportsPage() {
 
   // 2. Tải danh sách báo cáo lãng phí theo khoảng thời gian
   const { data: response, isLoading, isError } = useQuery({
-    queryKey: ['reports-waste', activeStore?.id, startDate, endDate],
+    queryKey: ['reports-waste', activeStore?.id, startDate, endDate, wastePage],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<WasteRecord[]>>(
-        `/reports/waste?startDate=${startDate}&endDate=${endDate}`
+      const res = await apiClient.get<ApiResponse<PageResponse<WasteRecord>>>(
+        `/reports/waste?startDate=${startDate}&endDate=${endDate}&page=${wastePage}&size=10&sort=createdAt,desc`
       )
       return res.data
     },
     enabled: !!activeStore?.id
   })
-  const wasteRecords = response?.data ?? []
+  const wasteRecords = response?.data.content ?? []
 
   const { data: dashboardResponse } = useQuery({
     queryKey: ['waste-dashboard', activeStore?.id],
@@ -82,14 +85,14 @@ export default function ReportsPage() {
   const wasteDashboard = dashboardResponse?.data
 
   const { data: auditResponse } = useQuery({
-    queryKey: ['audit-log', activeStore?.id, startDate, endDate],
+    queryKey: ['audit-log', activeStore?.id, startDate, endDate, auditPage],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<AuditLog[]>>(`/reports/audit-log?startDate=${startDate}&endDate=${endDate}`)
+      const res = await apiClient.get<ApiResponse<PageResponse<AuditLog>>>(`/reports/audit-log?startDate=${startDate}&endDate=${endDate}&page=${auditPage}&size=10&sort=createdAt,desc`)
       return res.data
     },
     enabled: !!activeStore?.id
   })
-  const auditLogs = auditResponse?.data ?? []
+  const auditLogs = auditResponse?.data.content ?? []
 
   // ==========================================
   // XỬ LÝ SỐ LIỆU THỐNG KÊ LÃNG PHÍ
@@ -361,6 +364,7 @@ export default function ReportsPage() {
                     })}
                   </tbody>
                 </table>
+                <Pagination page={wastePage} totalPages={response?.data.totalPages ?? 0} totalElements={response?.data.totalElements ?? 0} onPageChange={setWastePage} />
               </div>
             </DoubleBezelCard>
           </div>
@@ -390,7 +394,7 @@ export default function ReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink/5 text-ink/80">
-                {auditLogs.slice(0, 50).map((log) => (
+                {auditLogs.map((log) => (
                   <tr key={log.id} className="hover:bg-ink/5">
                     <td className="py-2.5 text-ink/60">{new Date(log.createdAt).toLocaleString('vi-VN')}</td>
                     <td className="py-2.5 font-semibold">{log.actorEmail}</td>
@@ -406,6 +410,7 @@ export default function ReportsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination page={auditPage} totalPages={auditResponse?.data.totalPages ?? 0} totalElements={auditResponse?.data.totalElements ?? 0} onPageChange={setAuditPage} />
           </div>
         </DoubleBezelCard>
 

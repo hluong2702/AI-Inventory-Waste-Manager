@@ -5,10 +5,22 @@ export interface ApiResponse<T> {
   message?: string
 }
 
+export interface PageResponse<T> {
+  content: T[]
+  number: number
+  size: number
+  totalElements: number
+  totalPages: number
+  first: boolean
+  last: boolean
+}
+
 export type Role = 'SYSTEM_ADMIN' | 'STORE_OWNER' | 'MANAGER' | 'STAFF'
+export type BackendRole = 'SYSTEM_ADMIN' | 'OWNER' | 'MANAGER' | 'STAFF'
 export type SubscriptionPlan = 'FREE' | 'BASIC' | 'PRO'
 export type StoreStatus = 'ACTIVE' | 'SUSPENDED'
 export type UserStatus = 'PENDING_ACTIVATION' | 'ACTIVE' | 'DISABLED'
+export type AlertType = 'LOW_STOCK' | 'EXPIRING_SOON'
 
 export interface SubscriptionLimits {
   stores: number | null
@@ -66,6 +78,7 @@ export interface AuthSession {
   currentStore: Store
   stores: Store[]
   accessToken: string
+  refreshToken: string
 }
 
 export interface AuthResponse {
@@ -87,6 +100,27 @@ export interface Store {
   subscriptionPlan: SubscriptionPlan
   subscriptionExpiresAt?: string
   status: StoreStatus
+}
+
+export interface AdminStore {
+  id: number
+  name: string
+  address: string | null
+  phone: string | null
+  subscriptionPlan: SubscriptionPlan
+  status: StoreStatus
+  createdAt: string
+}
+
+export interface AdminUser {
+  id: number
+  storeId: number | null
+  username: string
+  email: string
+  fullName: string
+  // Keep the open string branch so unexpected future backend roles render via fallback.
+  role: BackendRole | (string & {})
+  status: UserStatus
 }
 
 export interface Ingredient {
@@ -181,7 +215,7 @@ export interface IngredientImportResult {
 export interface Alert {
   id: number
   storeId: number
-  type: 'EXPIRY' | 'LOW_STOCK'
+  type: AlertType
   itemId: number // Ingredient ID
   message: string
   status: 'OPEN' | 'RESOLVED'

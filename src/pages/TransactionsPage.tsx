@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, Ingredient, StockTransaction, InventoryBatch } from '../types'
+import type { ApiResponse, Ingredient, StockTransaction, InventoryBatch, PageResponse } from '../types'
+import Pagination from '../components/Pagination'
 import { useStore } from '../context/StoreContext'
 import { useAuth } from '../context/AuthContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
@@ -16,6 +17,7 @@ export default function TransactionsPage() {
   
   // Tab hiện tại: 'history' | 'create'
   const [activeTab, setActiveTab] = useState<'history' | 'create'>('history')
+  const [page, setPage] = useState(0)
 
   // Form State cho phiếu giao dịch mới
   const [txType, setTxType] = useState<'IMPORT' | 'EXPORT'>('IMPORT')
@@ -51,22 +53,22 @@ export default function TransactionsPage() {
   const { data: batchesResponse } = useQuery({
     queryKey: ['batches'],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<InventoryBatch[]>>('/inventory/batches')
+      const res = await apiClient.get<ApiResponse<PageResponse<InventoryBatch>>>('/inventory/batches?page=0&size=100&sort=expiryDate,asc')
       return res.data
     }
   })
-  const batches = batchesResponse?.data ?? []
+  const batches = batchesResponse?.data.content ?? []
 
   // 3. Tải lịch sử giao dịch
   const { data: txResponse, isLoading: isLoadingTxs, isError } = useQuery({
-    queryKey: ['transactions', activeStore?.id],
+    queryKey: ['transactions', activeStore?.id, page],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<StockTransaction[]>>('/reports/transactions')
+      const res = await apiClient.get<ApiResponse<PageResponse<StockTransaction>>>(`/reports/transactions?page=${page}&size=10&sort=createdAt,desc`)
       return res.data
     },
     enabled: !!activeStore?.id
   })
-  const transactions = txResponse?.data ?? []
+  const transactions = txResponse?.data.content ?? []
 
   // 4. Mutation gửi phiếu giao dịch lên backend
   const createTxMutation = useMutation({
@@ -225,7 +227,7 @@ export default function TransactionsPage() {
           emptySubtitle="Bấm tạo phiếu mới để nhập hoặc xuất kho nguyên liệu."
         >
           <div className="space-y-4">
-            {[...transactions].reverse().map((tx) => (
+            {transactions.map((tx) => (
               <DoubleBezelCard
                 key={tx.id}
                 title={`Phiếu ${tx.type === 'IMPORT' ? 'Nhập kho' : 'Xuất kho'} #${tx.id}`}
@@ -283,6 +285,7 @@ export default function TransactionsPage() {
                 </div>
               </DoubleBezelCard>
             ))}
+            <Pagination page={page} totalPages={txResponse?.data.totalPages ?? 0} totalElements={txResponse?.data.totalElements ?? 0} onPageChange={setPage} />
           </div>
         </StateView>
       ) : (

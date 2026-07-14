@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../../api/client'
-import type { ApiResponse, Store } from '../../types'
+import type { AdminStore, ApiResponse, PageResponse } from '../../types'
+import Pagination from '../../components/Pagination'
 import { 
   MagnifyingGlass, 
   Buildings, 
@@ -11,20 +12,21 @@ import {
 
 export default function AdminStoresPage() {
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(0)
 
   // Tải tất cả stores của toàn hệ thống (không filter theo tenant)
   const { data: response, isLoading } = useQuery({
-    queryKey: ['admin-stores'],
+    queryKey: ['admin-stores', page],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<Store[]>>('/admin/stores')
+      const res = await apiClient.get<ApiResponse<PageResponse<AdminStore>>>(`/admin/stores?page=${page}&size=10&sort=id,desc`)
       return res.data
     }
   })
-  const stores = response?.data ?? []
+  const stores = response?.data.content ?? []
 
   const filtered = stores.filter(s =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
-    s.address.toLowerCase().includes(search.toLowerCase())
+    (s.address?.toLowerCase() ?? '').includes(search.toLowerCase())
   )
 
   return (
@@ -37,7 +39,7 @@ export default function AdminStoresPage() {
         </div>
         <h2 className="text-2xl font-bold text-white tracking-tight">Danh sách cửa hàng toàn hệ thống</h2>
         <p className="text-xs text-white/40 mt-1">
-          Tổng cộng <span className="text-white font-bold">{stores.length}</span> cửa hàng đang hoạt động trên nền tảng.
+          Tổng cộng <span className="text-white font-bold">{response?.data.totalElements ?? 0}</span> cửa hàng trên nền tảng.
         </p>
       </div>
 
@@ -99,13 +101,13 @@ export default function AdminStoresPage() {
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-1 text-white/50">
                       <MapPin size={10} className="shrink-0" />
-                      <span className="truncate max-w-[200px]">{store.address}</span>
+                      <span className="truncate max-w-[200px]">{store.address ?? 'Chưa cập nhật'}</span>
                     </div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-1 text-white/50">
                       <Phone size={10} />
-                      {store.phone}
+                      {store.phone ?? 'Chưa cập nhật'}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
@@ -120,6 +122,7 @@ export default function AdminStoresPage() {
           </tbody>
         </table>
       </div>
+      <Pagination dark page={page} totalPages={response?.data.totalPages ?? 0} totalElements={response?.data.totalElements ?? 0} onPageChange={setPage} />
     </div>
   )
 }

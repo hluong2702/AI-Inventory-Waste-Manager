@@ -4,6 +4,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import vn.inventoryai.admin.dto.*;
 import vn.inventoryai.common.enums.StoreStatus;
 import vn.inventoryai.common.enums.SubscriptionPlan;
@@ -28,16 +30,17 @@ public class AdminController {
     }
 
     @GetMapping("/users")
-    List<AdminUserResponse> users() {
-        return adminService.users();
+    Page<AdminUserResponse> users(Pageable pageable) {
+        return adminService.users(pageable);
     }
 
     @GetMapping("/stores")
-    List<AdminStoreResponse> stores(
+    Page<AdminStoreResponse> stores(
             @RequestParam(required = false) SubscriptionPlan plan,
-            @RequestParam(required = false) StoreStatus status
+            @RequestParam(required = false) StoreStatus status,
+            Pageable pageable
     ) {
-        return adminService.stores(plan, status);
+        return adminService.stores(plan, status, pageable);
     }
 
     @PatchMapping("/stores/{id}/status")

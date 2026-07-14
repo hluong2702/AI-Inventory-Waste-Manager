@@ -1,6 +1,8 @@
 package vn.inventoryai.store;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import vn.inventoryai.common.enums.StoreStatus;
 import vn.inventoryai.common.enums.SubscriptionPlan;
 
@@ -13,10 +15,13 @@ public interface StoreRepository extends JpaRepository<Store, Long> {
     long countByCreatedAtAfter(Instant from);
 
     List<Store> findBySubscriptionPlanAndStatus(SubscriptionPlan plan, StoreStatus status);
+    Page<Store> findBySubscriptionPlanAndStatus(SubscriptionPlan plan, StoreStatus status, Pageable pageable);
 
     List<Store> findBySubscriptionPlan(SubscriptionPlan plan);
+    Page<Store> findBySubscriptionPlan(SubscriptionPlan plan, Pageable pageable);
 
     List<Store> findByStatus(StoreStatus status);
+    Page<Store> findByStatus(StoreStatus status, Pageable pageable);
 
     List<Store> findByOwnerId(Long ownerId);
 

@@ -5,6 +5,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import vn.inventoryai.common.security.SecurityUtils;
 import vn.inventoryai.inventory.StockTransaction;
 import vn.inventoryai.inventory.StockTransactionRepository;
@@ -36,17 +38,15 @@ public class ReportController {
 
     @GetMapping("/waste")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    List<WasteRecordResponse> waste(
+    Page<WasteRecordResponse> waste(
             @RequestParam(required = false) LocalDate startDate,
-            @RequestParam(required = false) LocalDate endDate
+            @RequestParam(required = false) LocalDate endDate,
+            Pageable pageable
     ) {
         Long storeId = SecurityUtils.storeId();
         Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        return wasteRecordRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end)
-                .stream()
-                .map(this::toWasteResponse)
-                .toList();
+        return wasteRecordRepository.findByStoreIdAndCreatedAtBetween(storeId, start, end, pageable).map(this::toWasteResponse);
     }
 
     @GetMapping("/waste/export")
@@ -139,15 +139,15 @@ public class ReportController {
 
     @GetMapping("/audit-log")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    List<AuditLogResponse> auditLog(
+    Page<AuditLogResponse> auditLog(
             @RequestParam(required = false) LocalDate startDate,
-            @RequestParam(required = false) LocalDate endDate
+            @RequestParam(required = false) LocalDate endDate,
+            Pageable pageable
     ) {
         Long storeId = SecurityUtils.storeId();
         Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        return transactionRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end)
-                .stream()
+        return transactionRepository.findByStoreIdAndCreatedAtBetween(storeId, start, end, pageable)
                 .map(tx -> new AuditLogResponse(
                         tx.getId(),
                         tx.getCreatedAt(),
@@ -161,16 +161,14 @@ public class ReportController {
                         tx.getQuantity(),
                         tx.getIngredient().getUnit(),
                         tx.getCreatedBy().getEmail()
-                ))
-                .toList();
+                ));
     }
 
     @GetMapping("/transactions")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
-    List<StockTransactionResponse> transactions() {
+    Page<StockTransactionResponse> transactions(Pageable pageable) {
         Long storeId = SecurityUtils.storeId();
-        return transactionRepository.findAll().stream()
-                .filter(tx -> tx.getStore().getId().equals(storeId))
+        return transactionRepository.findByStoreId(storeId, pageable)
                 .map(tx -> new StockTransactionResponse(
                         tx.getId(),
                         storeId,
@@ -186,8 +184,7 @@ public class ReportController {
                                 tx.getBatch() == null ? null : tx.getBatch().getExpiryDate(),
                                 tx.getUnitCost()
                         ))
-                ))
-                .toList();
+                ));
     }
 
     private WasteRecordResponse toWasteResponse(WasteRecord w) {

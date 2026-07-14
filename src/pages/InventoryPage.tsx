@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, Ingredient, InventoryBatch } from '../types'
+import type { ApiResponse, Ingredient, InventoryBatch, PageResponse } from '../types'
+import Pagination from '../components/Pagination'
 import StateView from '../components/StateView'
 import { formatDate, formatVND, getDaysUntilExpiry } from '../utils/fefo'
 import { 
@@ -18,6 +19,7 @@ import {
 export default function InventoryPage() {
   // Chế độ xem: 'ingredient' (gom nhóm) | 'batch' (chi tiết lô)
   const [viewMode, setViewMode] = useState<'ingredient' | 'batch'>('ingredient')
+  const [page, setPage] = useState(0)
   // Trạng thái mở rộng dòng trong chế độ gom nhóm
   const [expandedIngs, setExpandedIngs] = useState<Record<number, boolean>>({})
 
@@ -33,13 +35,13 @@ export default function InventoryPage() {
 
   // 2. Tải danh sách lô hàng trong kho
   const { data: batchesResponse, isLoading: isLoadingBatches, isError } = useQuery({
-    queryKey: ['batches'],
+    queryKey: ['batches', page],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<InventoryBatch[]>>('/inventory/batches')
+      const res = await apiClient.get<ApiResponse<PageResponse<InventoryBatch>>>(`/inventory/batches?page=${page}&size=20&sort=expiryDate,asc`)
       return res.data
     }
   })
-  const batches = batchesResponse?.data ?? []
+  const batches = batchesResponse?.data.content ?? []
 
   const isLoading = isLoadingIngs || isLoadingBatches
 
@@ -333,6 +335,7 @@ export default function InventoryPage() {
         )}
         
       </StateView>
+      <Pagination page={page} totalPages={batchesResponse?.data.totalPages ?? 0} totalElements={batchesResponse?.data.totalElements ?? 0} onPageChange={setPage} />
     </div>
   )
 }

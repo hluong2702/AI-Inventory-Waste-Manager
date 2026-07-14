@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, Alert, InventoryBatch, WasteRecord, Ingredient, InventoryInsight, WasteRiskLevel, WasteDashboard } from '../types'
+import type { ApiResponse, Alert, InventoryBatch, WasteRecord, Ingredient, InventoryInsight, WasteRiskLevel, WasteDashboard, PageResponse } from '../types'
 import { useStore } from '../context/StoreContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
 import StateView from '../components/StateView'
@@ -52,7 +52,7 @@ export default function DashboardPage() {
   const { data: batchesResponse, isLoading: isLoadingBatches } = useQuery({
     queryKey: ['batches'],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<InventoryBatch[]>>('/inventory/batches')
+      const res = await apiClient.get<ApiResponse<PageResponse<InventoryBatch>>>('/inventory/batches?page=0&size=100&sort=expiryDate,asc')
       return res.data
     }
   })
@@ -61,7 +61,7 @@ export default function DashboardPage() {
   const { data: wasteResponse, isLoading: isLoadingWaste } = useQuery({
     queryKey: ['waste-logs', activeStore?.id],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<WasteRecord[]>>('/reports/waste')
+      const res = await apiClient.get<ApiResponse<PageResponse<WasteRecord>>>('/reports/waste?page=0&size=100&sort=createdAt,desc')
       return res.data
     },
     enabled: !!activeStore?.id
@@ -88,8 +88,8 @@ export default function DashboardPage() {
 
   const ingredients = ingResponse?.data ?? []
   const alerts = alertsResponse?.data ?? []
-  const batches = batchesResponse?.data ?? []
-  const wasteRecords = wasteResponse?.data ?? []
+  const batches = batchesResponse?.data.content ?? []
+  const wasteRecords = wasteResponse?.data.content ?? []
   const insights = insightResponse?.data ?? []
   const wasteDashboard = wasteDashboardResponse?.data
 
@@ -400,19 +400,27 @@ export default function DashboardPage() {
                 Chúc mừng! Không có cảnh báo khẩn cấp nào chưa xử lý.
               </div>
             ) : (
-              alerts.filter(a => a.status === 'OPEN').slice(0, 3).map((alert) => (
-                <div 
-                  key={alert.id} 
-                  className="flex items-start justify-between gap-4 p-4 rounded-xl bg-terracotta/5 border border-terracotta/10"
+              alerts.filter(a => a.status === 'OPEN').slice(0, 3).map((alert) => {
+                const isExpiry = alert.type === 'EXPIRING_SOON'
+                const AlertIcon = isExpiry ? CalendarBlank : WarningCircle
+                return (
+                <div
+                  key={alert.id}
+                  className={`flex items-start justify-between gap-4 p-4 rounded-xl border ${
+                    isExpiry ? 'bg-red-500/5 border-red-500/10' : 'bg-terracotta/5 border-terracotta/10'
+                  }`}
                 >
                   <div className="flex gap-2.5 items-start">
-                    <CalendarBlank size={18} className="text-terracotta shrink-0 mt-0.5" />
+                    <AlertIcon
+                      size={18}
+                      className={`${isExpiry ? 'text-red-600' : 'text-terracotta'} shrink-0 mt-0.5`}
+                    />
                     <div>
                       <p className="text-xs font-semibold text-ink leading-normal">
                         {alert.message}
                       </p>
                       <span className="text-[10px] text-ink/50 block mt-1">
-                        Ngày tạo: {formatDate(alert.createdAt)} · Phân loại: {alert.type === 'EXPIRY' ? 'Quá hạn / Hết hạn' : 'Tồn kho thấp'}
+                        Ngày tạo: {formatDate(alert.createdAt)} · Phân loại: {isExpiry ? 'Cận / Quá hạn' : 'Tồn kho thấp'}
                       </span>
                     </div>
                   </div>
@@ -427,7 +435,8 @@ export default function DashboardPage() {
                     Đã xử lý
                   </button>
                 </div>
-              ))
+                )
+              })
             )}
           </div>
         </DoubleBezelCard>

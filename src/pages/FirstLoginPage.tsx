@@ -8,7 +8,7 @@ import { changeFirstPassword } from '../services/authService'
 import { useAuthStore } from '../stores/authStore'
 
 const firstLoginSchema = zod.object({
-  newPassword: zod.string().min(6, 'Mật khẩu mới phải có ít nhất 6 ký tự'),
+  newPassword: zod.string().min(8, 'Mật khẩu mới phải có ít nhất 8 ký tự'),
   confirmPassword: zod.string().min(1, 'Vui lòng xác nhận mật khẩu'),
 }).refine((data) => data.newPassword === data.confirmPassword, {
   path: ['confirmPassword'],
@@ -60,6 +60,7 @@ export default function FirstLoginPage() {
 
         <label className="block">
           <span className="text-xs font-bold text-ink/75">Mật khẩu mới</span>
+          <span className="mt-1 block text-xs text-ink/50">Sử dụng ít nhất 8 ký tự.</span>
           <span className="mt-1.5 flex items-center gap-2 rounded-xl border border-ink/10 bg-offwhite/50 px-3">
             <Lock size={17} className="text-ink/35" />
             <input type="password" {...register('newPassword')} className="w-full bg-transparent py-3 text-sm outline-none" />

@@ -55,16 +55,12 @@ public class ReportController {
             @RequestParam(required = false) LocalDate startDate,
             @RequestParam(required = false) LocalDate endDate
     ) {
-        StringBuilder csv = new StringBuilder("createdAt,store,ingredient,batch,quantity,unit,reason,estimatedCost,recordedBy\n");
-        waste(startDate, endDate).forEach(w -> csv.append(w.createdAt()).append(',')
-                .append(SecurityUtils.storeId()).append(',')
-                .append(w.ingredientId()).append(',')
-                .append(w.batchId() == null ? "" : w.batchId()).append(',')
-                .append(w.quantity()).append(',')
-                .append("").append(',')
-                .append(w.reason()).append(',')
-                .append(w.estimatedCost()).append(',')
-                .append(w.recordedBy() == null ? "" : w.recordedBy()).append('\n'));
+        StringBuilder csv = new StringBuilder("\uFEFFcreatedAt,store,ingredient,batch,quantity,unit,reason,estimatedCost,recordedBy\r\n");
+        wasteRecordRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(SecurityUtils.storeId(),
+                startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC),
+                endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC))
+                .stream().map(this::toWasteResponse).forEach(w -> CsvEscaper.appendRow(csv, w.createdAt(), SecurityUtils.storeId(), w.ingredientId(),
+                w.batchId(), w.quantity(), "", w.reason(), w.estimatedCost(), w.recordedBy()));
         return csv("waste-report.csv", csv.toString());
     }
 
@@ -77,16 +73,11 @@ public class ReportController {
         Long storeId = SecurityUtils.storeId();
         Instant start = startDate == null ? Instant.EPOCH : startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant end = endDate == null ? Instant.now().plus(1, ChronoUnit.DAYS) : endDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        StringBuilder csv = new StringBuilder("createdAt,store,ingredient,batch,type,reason,quantity,unitCost,recordedBy\n");
-        transactionRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end).forEach(tx -> csv.append(tx.getCreatedAt()).append(',')
-                .append(tx.getStore().getName()).append(',')
-                .append(tx.getIngredient().getName()).append(',')
-                .append(tx.getBatch() == null ? "" : tx.getBatch().getBatchNumber()).append(',')
-                .append(tx.getType().name()).append(',')
-                .append(tx.getReason()).append(',')
-                .append(tx.getQuantity()).append(',')
-                .append(tx.getUnitCost()).append(',')
-                .append(tx.getCreatedBy().getEmail()).append('\n'));
+        StringBuilder csv = new StringBuilder("\uFEFFcreatedAt,store,ingredient,batch,type,reason,quantity,unitCost,recordedBy\r\n");
+        transactionRepository.findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(storeId, start, end).forEach(tx ->
+                CsvEscaper.appendRow(csv, tx.getCreatedAt(), tx.getStore().getName(), tx.getIngredient().getName(),
+                        tx.getBatch() == null ? "" : tx.getBatch().getBatchNumber(), tx.getType().name(), tx.getReason(),
+                        tx.getQuantity(), tx.getUnitCost(), tx.getCreatedBy().getEmail()));
         return csv("inventory-transactions.csv", csv.toString());
     }
 
@@ -211,4 +202,5 @@ public class ReportController {
                 .header("Content-Disposition", "attachment; filename=" + filename)
                 .body(content);
     }
+
 }

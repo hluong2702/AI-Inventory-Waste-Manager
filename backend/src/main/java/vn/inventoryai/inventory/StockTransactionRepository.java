@@ -32,6 +32,9 @@ public interface StockTransactionRepository extends JpaRepository<StockTransacti
 
     long countByStoreId(Long storeId);
 
+    @Query("select t.store.id, count(t) from StockTransaction t group by t.store.id")
+    List<Object[]> countGroupedByStoreId();
+
     Optional<StockTransaction> findTopByStoreIdOrderByCreatedAtDesc(Long storeId);
 
     List<StockTransaction> findByStoreIdAndCreatedAtBetweenOrderByCreatedAtDesc(Long storeId, Instant start, Instant end);

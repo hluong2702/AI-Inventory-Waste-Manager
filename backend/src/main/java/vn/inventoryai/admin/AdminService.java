@@ -23,6 +23,8 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -41,8 +43,10 @@ public class AdminService {
                 .map(subscription -> subscription.getPlan() == SubscriptionPlan.BASIC ? BigDecimal.valueOf(299_000) : BigDecimal.valueOf(699_000))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        Map<Long, Long> transactionCounts = transactionRepository.countGroupedByStoreId().stream()
+                .collect(Collectors.toMap(row -> (Long) row[0], row -> (Long) row[1]));
         List<StoreActivityResponse> mostActive = storeRepository.findAll().stream()
-                .map(store -> new StoreActivityResponse(store.getId(), store.getName(), transactionRepository.countByStoreId(store.getId())))
+                .map(store -> new StoreActivityResponse(store.getId(), store.getName(), transactionCounts.getOrDefault(store.getId(), 0L)))
                 .sorted(Comparator.comparingLong(StoreActivityResponse::transactionCount).reversed())
                 .limit(10)
                 .toList();

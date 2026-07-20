@@ -423,3 +423,34 @@ export interface CreateRecipeRequest {
     quantity: number
   }[]
 }
+
+export type DailyActionType = 'EXPIRY_RISK' | 'REORDER' | 'ANOMALY'
+export type DailyActionStatus = 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED' | 'DISMISSED'
+
+export interface BackendDailyAction {
+  id: number
+  tenantId: number
+  actionType: DailyActionType
+  productId: number
+  productName: string
+  productCode: string
+  productUnit: string
+  batchId: number | null
+  batchNumber: string | null
+  expiryDate: string | null
+  title: string
+  description: string
+  riskQtyMin: number | null
+  riskQtyMax: number | null
+  riskValueEstimate: number | null
+  priorityScore: number
+  status: DailyActionStatus
+  computedAt: string
+  expiresAt: string | null
+  acknowledgedAt: string | null
+  resolvedAt: string | null
+  dismissedAt: string | null
+  dismissReason: string | null
+  createdAt: string
+}
+

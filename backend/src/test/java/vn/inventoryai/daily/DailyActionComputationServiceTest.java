@@ -15,6 +15,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -61,6 +62,7 @@ class DailyActionComputationServiceTest {
         when(tenantSettingsRepository.findByTenantId(STORE_ID)).thenReturn(Optional.empty());
 
         // Default auto-resolve trả về 0 (không có gì để resolve)
+        when(dailyActionRepository.resolveExpiredActions(anyLong(), any())).thenReturn(0);
         when(dailyActionRepository.autoResolveStaleExpiryRisk(anyLong(), any())).thenReturn(0);
         when(dailyActionRepository.autoResolveStaleReorder(anyLong(), any())).thenReturn(0);
         when(dailyActionRepository.deleteStaleClosedActions(anyLong(), any())).thenReturn(0);
@@ -264,6 +266,107 @@ class DailyActionComputationServiceTest {
         service.computeForStore(STORE_ID);
 
         verify(dailyActionRepository).deleteStaleClosedActions(eq(STORE_ID), any(Instant.class));
+    }
+
+    @Test
+    void createsAnomalyActionWhenRecentConsumptionSpikes() {
+        Ingredient milk = ingredient(1L, "Sữa tươi", "hộp", "10", "25000");
+
+        when(batchRepository.findByStoreIdAndQuantityGreaterThanAndExpiryDateLessThanEqual(
+                any(), any(), any()
+        )).thenReturn(Collections.emptyList()); // No expiry warning
+
+        when(ingredientRepository.findByStoreIdAndDeletedFalse(STORE_ID))
+                .thenReturn(List.of(milk));
+
+        // Tồn kho nhiều để tránh Reorder trigger (20 hộp, minStock = 10)
+        when(batchRepository.sumSellableGroupedByIngredientIds(any(), anyList(), any()))
+                .thenReturn(List.of(stockRow(1L, "20")));
+
+        // Mock 24h consumption: 5 hộp (lớn hơn ngưỡng min 1.0)
+        Instant now = Instant.now(clock);
+        Instant last24hStart = now.minus(24, ChronoUnit.HOURS);
+        when(transactionRepository.sumQuantitySinceGroupedByIngredientIds(
+                eq(STORE_ID),
+                anyList(),
+                eq(StockTransactionType.OUT),
+                eq("EXPORT_CONSUME"),
+                eq(last24hStart)
+        )).thenReturn(List.of(txRow(1L, "5.0")));
+
+        // Mock lookback consumption: 10 hộp total (5 hộp 24h + 5 hộp lịch sử 28 ngày)
+        // average daily baseline = 5 / 28 = 0.178.
+        // 5.0 is much higher than 0.178 * 1.25 -> Anomaly!
+        Instant historyStart = now.minus(29, ChronoUnit.DAYS);
+        when(transactionRepository.sumQuantitySinceGroupedByIngredientIds(
+                eq(STORE_ID),
+                anyList(),
+                eq(StockTransactionType.OUT),
+                eq("EXPORT_CONSUME"),
+                eq(historyStart)
+        )).thenReturn(List.of(txRow(1L, "10.0")));
+
+        when(dailyActionRepository.findOpenByRecomputeKey(
+                eq(STORE_ID), eq(DailyActionType.ANOMALY), eq(1L), isNull()
+        )).thenReturn(Optional.empty());
+
+        DailyActionComputationService.ComputationResult result = service.computeForStore(STORE_ID);
+
+        assertThat(result.anomalyCreated()).isEqualTo(1);
+        assertThat(result.anomalyUpdated()).isEqualTo(0);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(DailyAction.class);
+        verify(dailyActionRepository, atLeastOnce()).save(captor.capture());
+
+        DailyAction saved = captor.getAllValues().stream()
+                .filter(a -> a.getActionType() == DailyActionType.ANOMALY)
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(saved.getStatus()).isEqualTo(DailyActionStatus.OPEN);
+        assertThat(saved.getTitle()).contains("Tiêu thụ tăng bất thường");
+    }
+
+    @Test
+    void noAnomalyActionWhenRecentConsumptionIsNormal() {
+        Ingredient milk = ingredient(1L, "Sữa tươi", "hộp", "10", "25000");
+
+        when(batchRepository.findByStoreIdAndQuantityGreaterThanAndExpiryDateLessThanEqual(
+                any(), any(), any()
+        )).thenReturn(Collections.emptyList());
+
+        when(ingredientRepository.findByStoreIdAndDeletedFalse(STORE_ID))
+                .thenReturn(List.of(milk));
+
+        when(batchRepository.sumSellableGroupedByIngredientIds(any(), anyList(), any()))
+                .thenReturn(List.of(stockRow(1L, "20")));
+
+        // Mock 24h consumption: 1 hộp
+        Instant now = Instant.now(clock);
+        Instant last24hStart = now.minus(24, ChronoUnit.HOURS);
+        when(transactionRepository.sumQuantitySinceGroupedByIngredientIds(
+                eq(STORE_ID),
+                anyList(),
+                eq(StockTransactionType.OUT),
+                eq("EXPORT_CONSUME"),
+                eq(last24hStart)
+        )).thenReturn(List.of(txRow(1L, "1.0")));
+
+        // Mock lookback consumption: 30 hộp total (1 hộp 24h + 29 hộp lịch sử 28 ngày)
+        // average daily baseline = 29 / 28 = 1.03
+        // 1.0 is not higher than 1.03 * 1.25 -> No anomaly
+        Instant historyStart = now.minus(29, ChronoUnit.DAYS);
+        when(transactionRepository.sumQuantitySinceGroupedByIngredientIds(
+                eq(STORE_ID),
+                anyList(),
+                eq(StockTransactionType.OUT),
+                eq("EXPORT_CONSUME"),
+                eq(historyStart)
+        )).thenReturn(List.of(txRow(1L, "30.0")));
+
+        DailyActionComputationService.ComputationResult result = service.computeForStore(STORE_ID);
+
+        assertThat(result.anomalyCreated()).isEqualTo(0);
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────

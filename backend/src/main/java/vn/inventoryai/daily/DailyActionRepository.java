@@ -136,4 +136,21 @@ public interface DailyActionRepository extends JpaRepository<DailyAction, Long> 
             @Param("tenantId") Long tenantId,
             @Param("threshold") Instant threshold
     );
+
+    /**
+     * Tự động giải quyết các hành động đã quá hạn (expiresAt <= current_time).
+     * Dùng cho ANOMALY hoặc các hành động có vòng đời giới hạn.
+     */
+    @Modifying
+    @Query("""
+            update DailyAction a
+            set a.status = 'RESOLVED', a.resolvedAt = :now, a.updatedAt = :now
+            where a.tenantId = :tenantId
+              and a.status in ('OPEN', 'ACKNOWLEDGED')
+              and a.expiresAt <= :now
+            """)
+    int resolveExpiredActions(
+            @Param("tenantId") Long tenantId,
+            @Param("now") Instant now
+    );
 }

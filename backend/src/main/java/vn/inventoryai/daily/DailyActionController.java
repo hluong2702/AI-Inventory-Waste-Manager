@@ -176,6 +176,8 @@ public class DailyActionController {
                 "expiryRiskUpdated", result.expiryRiskUpdated(),
                 "reorderCreated", result.reorderCreated(),
                 "reorderUpdated", result.reorderUpdated(),
+                "anomalyCreated", result.anomalyCreated(),
+                "anomalyUpdated", result.anomalyUpdated(),
                 "autoResolved", result.autoResolved(),
                 "cleanedUp", result.cleanedUp()
         );

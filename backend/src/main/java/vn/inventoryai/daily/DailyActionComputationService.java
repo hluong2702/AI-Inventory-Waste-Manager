@@ -70,6 +70,8 @@ public class DailyActionComputationService {
             int expiryRiskUpdated,
             int reorderCreated,
             int reorderUpdated,
+            int anomalyCreated,
+            int anomalyUpdated,
             int autoResolved,
             int cleanedUp
     ) {
@@ -87,10 +89,11 @@ public class DailyActionComputationService {
 
         LocalDate expiryThreshold = today.plusDays(settings.getExpiryWarningDays());
 
-        // Bước 1: Tự động giải quyết hành động không còn hợp lệ
+        // Bước 1: Tự động giải quyết hành động không còn hợp lệ hoặc quá hạn
+        int resolvedExpired = dailyActionRepository.resolveExpiredActions(storeId, Instant.now(clock));
         int resolved1 = dailyActionRepository.autoResolveStaleExpiryRisk(storeId, expiryThreshold);
         int resolved2 = dailyActionRepository.autoResolveStaleReorder(storeId, today);
-        int autoResolved = resolved1 + resolved2;
+        int autoResolved = resolvedExpired + resolved1 + resolved2;
 
         // Bước 2: Tính toán EXPIRY_RISK
         ExpiryRiskCount expiryCount = computeExpiryRisk(storeId, today, expiryThreshold, settings);
@@ -98,19 +101,24 @@ public class DailyActionComputationService {
         // Bước 3: Tính toán REORDER
         ReorderCount reorderCount = computeReorder(storeId, today, settings);
 
+        // Bước 3.5: Tính toán ANOMALY
+        AnomalyCount anomalyCount = computeAnomaly(storeId, today, settings);
+
         // Bước 4: Dọn dẹp bản ghi cũ
         Instant cleanupThreshold = Instant.now(clock).minus(CLEANUP_DAYS, ChronoUnit.DAYS);
         int cleanedUp = dailyActionRepository.deleteStaleClosedActions(storeId, cleanupThreshold);
 
-        log.debug("Daily actions computed for storeId={}: expiryRisk={}/{}, reorder={}/{}, autoResolved={}, cleanedUp={}",
+        log.debug("Daily actions computed for storeId={}: expiryRisk={}/{}, reorder={}/{}, anomaly={}/{}, autoResolved={}, cleanedUp={}",
                 storeId,
                 expiryCount.created(), expiryCount.updated(),
                 reorderCount.created(), reorderCount.updated(),
+                anomalyCount.created(), anomalyCount.updated(),
                 autoResolved, cleanedUp);
 
         return new ComputationResult(
                 expiryCount.created(), expiryCount.updated(),
                 reorderCount.created(), reorderCount.updated(),
+                anomalyCount.created(), anomalyCount.updated(),
                 autoResolved, cleanedUp
         );
     }
@@ -430,6 +438,162 @@ public class DailyActionComputationService {
         }
         sb.append(String.format("Đề xuất đặt thêm %.3f %s.", recommendedOrderQty, ingredient.getUnit()));
         return sb.toString();
+    }
+
+    // ─── ANOMALY ──────────────────────────────────────────────────────────────
+
+    private record AnomalyCount(int created, int updated) {}
+
+    private AnomalyCount computeAnomaly(Long storeId, LocalDate today, TenantSettings settings) {
+        List<Ingredient> ingredients = ingredientRepository.findByStoreIdAndDeletedFalse(storeId);
+        if (ingredients.isEmpty()) {
+            return new AnomalyCount(0, 0);
+        }
+
+        List<Long> ingredientIds = ingredients.stream().map(Ingredient::getId).toList();
+
+        Instant now = Instant.now(clock);
+        // Lượng tiêu thụ trong 24 giờ qua (sliding window)
+        Instant last24hStart = now.minus(24, ChronoUnit.HOURS);
+
+        // Khoảng lịch sử dùng để đối chiếu (mặc định 28 ngày)
+        int lookbackDays = Math.max(7, settings.getExpiryConsumptionLookbackDays());
+        Instant historyStart = now.minus(lookbackDays + 1L, ChronoUnit.DAYS);
+
+        Map<Long, BigDecimal> last24hConsumption = transactionRepository
+                .sumQuantitySinceGroupedByIngredientIds(
+                        storeId,
+                        ingredientIds,
+                        StockTransactionType.OUT,
+                        "EXPORT_CONSUME",
+                        last24hStart
+                )
+                .stream()
+                .collect(Collectors.toMap(
+                        row -> row.getIngredientId(),
+                        row -> row.getQuantity(),
+                        BigDecimal::add
+                ));
+
+        Map<Long, BigDecimal> lookbackConsumption = transactionRepository
+                .sumQuantitySinceGroupedByIngredientIds(
+                        storeId,
+                        ingredientIds,
+                        StockTransactionType.OUT,
+                        "EXPORT_CONSUME",
+                        historyStart
+                )
+                .stream()
+                .collect(Collectors.toMap(
+                        row -> row.getIngredientId(),
+                        row -> row.getQuantity(),
+                        BigDecimal::add
+                ));
+
+        int created = 0;
+        int updated = 0;
+
+        BigDecimal thresholdPercent = settings.getAnomalyThresholdPercent();
+        BigDecimal minAbsoluteQty = settings.getAnomalyMinAbsoluteQuantity();
+
+        for (Ingredient ingredient : ingredients) {
+            Long id = ingredient.getId();
+            BigDecimal last24hQty = last24hConsumption.getOrDefault(id, ZERO);
+
+            // Bỏ qua nếu lượng tiêu thụ quá bé để tránh nhiễu hệ thống (ví dụ: dùng thêm 0.05g muối)
+            if (last24hQty.compareTo(minAbsoluteQty) < 0) {
+                continue;
+            }
+
+            BigDecimal totalConsumed = lookbackConsumption.getOrDefault(id, ZERO);
+            // Lượng tiêu thụ lịch sử loại trừ 24h qua
+            BigDecimal historyQty = totalConsumed.subtract(last24hQty).max(ZERO);
+            BigDecimal avgHistoryDaily = historyQty.divide(BigDecimal.valueOf(lookbackDays), 3, RoundingMode.HALF_UP);
+
+            boolean isAnomaly = false;
+            BigDecimal diffPercent = ZERO;
+
+            if (avgHistoryDaily.signum() == 0) {
+                // Lịch sử không tiêu thụ nhưng đột ngột tiêu thụ số lượng lớn -> Anomaly!
+                isAnomaly = true;
+                diffPercent = HUNDRED;
+            } else {
+                BigDecimal ratio = last24hQty.divide(avgHistoryDaily, 4, RoundingMode.HALF_UP);
+                BigDecimal thresholdRatio = BigDecimal.ONE.add(thresholdPercent.divide(HUNDRED, 4, RoundingMode.HALF_UP));
+
+                if (ratio.compareTo(thresholdRatio) > 0) {
+                    isAnomaly = true;
+                    diffPercent = ratio.subtract(BigDecimal.ONE).multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP);
+                }
+            }
+
+            if (!isAnomaly) {
+                continue;
+            }
+
+            BigDecimal excess = last24hQty.subtract(avgHistoryDaily).max(ZERO);
+            BigDecimal riskValue = excess.multiply(ingredient.getUnitCost()).setScale(2, RoundingMode.HALF_UP);
+
+            // Priority score dựa trên giá trị tài chính chênh lệch (đơn vị: nghìn đồng)
+            BigDecimal priorityScore = riskValue.compareTo(ZERO) > 0
+                    ? riskValue.divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP)
+                    : excess.multiply(BigDecimal.valueOf(10)).setScale(6, RoundingMode.HALF_UP);
+
+            String title = "Tiêu thụ tăng bất thường";
+            String description = String.format(
+                    "Nguyên liệu tiêu thụ tăng vọt %.3f %s trong 24 giờ qua so với trung bình lịch sử %.3f %s/ngày (tăng %s%%).",
+                    last24hQty, ingredient.getUnit(), avgHistoryDaily, ingredient.getUnit(), diffPercent.toPlainString()
+            );
+
+            String metadata = String.format(
+                    "{\"last24hConsumption\":%s,\"avgHistoryDaily\":%s,\"diffPercent\":%s}",
+                    last24hQty.toPlainString(),
+                    avgHistoryDaily.toPlainString(),
+                    diffPercent.toPlainString()
+            );
+
+            Optional<DailyAction> existing = dailyActionRepository.findOpenByRecomputeKey(
+                    storeId, DailyActionType.ANOMALY, id, null
+            );
+
+            // Anomaly cảnh báo có hạn dùng tự động 3 ngày để không làm loãng bảng
+            Instant expiresAt = Instant.now(clock).plus(3, ChronoUnit.DAYS);
+
+            if (existing.isPresent()) {
+                DailyAction action = existing.get();
+                action.setTitle(title);
+                action.setDescription(description);
+                action.setRiskQtyMin(excess);
+                action.setRiskQtyMax(last24hQty);
+                action.setRiskValueEstimate(riskValue);
+                action.setPriorityScore(priorityScore);
+                action.setMetadata(metadata);
+                action.setComputedAt(Instant.now(clock));
+                action.setExpiresAt(expiresAt);
+                dailyActionRepository.save(action);
+                updated++;
+            } else {
+                DailyAction action = new DailyAction();
+                action.setTenantId(storeId);
+                action.setActionType(DailyActionType.ANOMALY);
+                action.setProduct(ingredient);
+                action.setBatch(null);
+                action.setTitle(title);
+                action.setDescription(description);
+                action.setRiskQtyMin(excess);
+                action.setRiskQtyMax(last24hQty);
+                action.setRiskValueEstimate(riskValue);
+                action.setPriorityScore(priorityScore);
+                action.setStatus(DailyActionStatus.OPEN);
+                action.setComputedAt(Instant.now(clock));
+                action.setExpiresAt(expiresAt);
+                action.setMetadata(metadata);
+                dailyActionRepository.save(action);
+                created++;
+            }
+        }
+
+        return new AnomalyCount(created, updated);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

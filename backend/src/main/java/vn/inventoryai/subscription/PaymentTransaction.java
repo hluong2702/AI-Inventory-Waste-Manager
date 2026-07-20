@@ -40,6 +40,9 @@ public class PaymentTransaction {
     @Column(name = "provider_transaction_id", nullable = false, length = 128)
     private String providerTransactionId;
 
+    @Column(name = "idempotency_key", nullable = false, length = 128)
+    private String idempotencyKey;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private PaymentStatus status;

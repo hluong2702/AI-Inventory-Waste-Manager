@@ -4,17 +4,26 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vn.inventoryai.auth.TenantMembership;
+import vn.inventoryai.auth.TenantMembershipRepository;
 import vn.inventoryai.auth.UserRepository;
 import vn.inventoryai.common.enums.Role;
 import vn.inventoryai.common.enums.StoreStatus;
 import vn.inventoryai.common.enums.SubscriptionPlan;
+import vn.inventoryai.common.enums.UserStatus;
 import vn.inventoryai.common.error.AppException;
 import vn.inventoryai.common.error.ErrorCode;
 import vn.inventoryai.common.security.SecurityUtils;
 import vn.inventoryai.billing.PlanEntitlementService;
 import vn.inventoryai.store.dto.StoreRequest;
 import vn.inventoryai.store.dto.StoreResponse;
+import vn.inventoryai.subscription.SubscriptionPlanRepository;
+import vn.inventoryai.subscription.SubscriptionStatus;
+import vn.inventoryai.subscription.TenantSubscription;
+import vn.inventoryai.subscription.TenantSubscriptionRepository;
 
+import java.time.Instant;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -23,36 +32,40 @@ import java.util.List;
 public class StoreService {
     private final StoreRepository storeRepository;
     private final UserRepository userRepository;
-    private final SubscriptionRepository subscriptionRepository;
     private final PlanEntitlementService planEntitlementService;
+    private final SubscriptionPlanRepository subscriptionPlanRepository;
+    private final TenantSubscriptionRepository tenantSubscriptionRepository;
+    private final TenantMembershipRepository membershipRepository;
+    private final Clock clock;
 
     @Transactional(readOnly = true)
     public List<StoreResponse> currentUserStores() {
         var principal = SecurityUtils.principal();
         if (principal.role() == Role.SYSTEM_ADMIN) {
-            return storeRepository.findAll().stream().map(this::toResponse).toList();
+            throw new AppException(
+                    ErrorCode.FORBIDDEN,
+                    HttpStatus.FORBIDDEN,
+                    "System administrators must use the audited admin store endpoint"
+            );
         }
-        var user = userRepository.findById(principal.userId())
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "User not found"));
-        if (principal.role() == Role.OWNER) {
-            return storeRepository.findByOwnerId(principal.userId()).stream()
-                    .filter(store -> store.getStatus() == StoreStatus.ACTIVE)
-                    .map(this::toResponse)
-                    .toList();
-        }
-        Store store = user.getStore();
-        if (store == null) return List.of();
-        return List.of(toResponse(store));
+        return membershipRepository.findAllByUserIdAndStatusAndStoreStatusOrderByIdAsc(
+                        principal.userId(), UserStatus.ACTIVE, StoreStatus.ACTIVE
+                ).stream()
+                .map(TenantMembership::getStore)
+                .map(this::toResponse)
+                .toList();
     }
 
     @Transactional
     public StoreResponse create(StoreRequest request) {
         var principal = SecurityUtils.principal();
-        var owner = userRepository.findById(principal.userId())
+        // Serialize all store creation by the same owner. Locking only the selected
+        // subscription would still allow concurrent requests through two owned tenants.
+        var owner = userRepository.findByIdForUpdate(principal.userId())
                 .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "User not found"));
-        Subscription currentSubscription = subscriptionRepository.findByStoreId(SecurityUtils.storeId())
+        TenantSubscription currentSubscription = tenantSubscriptionRepository.findActiveForUpdate(SecurityUtils.storeId())
                 .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Subscription not found"));
-        Integer maxStores = planEntitlementService.limits(currentSubscription.getPlan()).stores();
+        Integer maxStores = planEntitlementService.limits(currentSubscription.getPlan().getCode()).stores();
         long currentStores = storeRepository.countByOwnerIdAndStatus(principal.userId(), StoreStatus.ACTIVE);
         if (maxStores != null && currentStores >= maxStores) {
             throw new AppException(ErrorCode.PLAN_LIMIT_EXCEEDED, HttpStatus.CONFLICT, "Store limit exceeded for current plan");
@@ -63,18 +76,29 @@ public class StoreService {
         store.setAddress(request.address());
         store.setPhone(request.phone());
         store.setOwner(owner);
-        store.setSubscriptionPlan(currentSubscription.getPlan());
+        store.setSubscriptionPlan(SubscriptionPlan.FREE);
         store.setStatus(StoreStatus.ACTIVE);
         Store saved = storeRepository.save(store);
 
-        Subscription subscription = new Subscription();
-        subscription.setStore(saved);
-        subscription.setPlan(currentSubscription.getPlan());
-        subscription.setMaxStaff(planEntitlementService.limits(currentSubscription.getPlan()).staff());
-        subscription.setMaxIngredients(planEntitlementService.limits(currentSubscription.getPlan()).ingredients());
-        subscription.setExpiresAt(currentSubscription.getExpiresAt() == null ? LocalDate.now().plusMonths(1) : currentSubscription.getExpiresAt());
-        subscription.setActive(true);
-        subscriptionRepository.save(subscription);
+        LocalDate businessDate = LocalDate.now(clock);
+        var plan = subscriptionPlanRepository.findByCodeAndActiveTrue(SubscriptionPlan.FREE)
+                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Subscription plan not found"));
+        TenantSubscription tenantSubscription = new TenantSubscription();
+        tenantSubscription.setTenant(saved);
+        tenantSubscription.setPlan(plan);
+        tenantSubscription.setStatus(SubscriptionStatus.ACTIVE);
+        tenantSubscription.setStartDate(businessDate);
+        tenantSubscription.setEndDate(businessDate.plusMonths(1));
+        tenantSubscription.setAutoRenew(false);
+        tenantSubscription.setActivatedAt(Instant.now());
+        tenantSubscriptionRepository.save(tenantSubscription);
+
+        TenantMembership membership = new TenantMembership();
+        membership.setStore(saved);
+        membership.setUser(owner);
+        membership.setRole(Role.OWNER);
+        membership.setStatus(UserStatus.ACTIVE);
+        membershipRepository.save(membership);
 
         return toResponse(saved);
     }
@@ -99,13 +123,17 @@ public class StoreService {
     }
 
     private Store ownedStore(Long id) {
-        Store store = storeRepository.findById(id)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Store not found"));
         Long userId = SecurityUtils.principal().userId();
-        if (store.getOwner() == null || !store.getOwner().getId().equals(userId)) {
-            throw new AppException(ErrorCode.STORE_MISMATCH, HttpStatus.FORBIDDEN, "Store does not belong to current owner");
-        }
-        return store;
+        TenantMembership membership = membershipRepository.findByUserIdAndStoreIdAndStatusAndStoreStatus(
+                        userId, id, UserStatus.ACTIVE, StoreStatus.ACTIVE
+                )
+                .filter(candidate -> candidate.getRole() == Role.OWNER)
+                .orElseThrow(() -> new AppException(
+                        ErrorCode.STORE_MISMATCH,
+                        HttpStatus.FORBIDDEN,
+                        "Store does not belong to current owner"
+                ));
+        return membership.getStore();
     }
 
     private StoreResponse toResponse(Store store) {

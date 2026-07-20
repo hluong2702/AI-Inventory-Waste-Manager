@@ -10,9 +10,21 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage/
+playwright-report/
+test-results/
+backend/build/
+backend/.gradle/
 .env
 .env.*.local
 *.local
+
+# Local database operations may contain account identifiers or password hashes.
+/db_seed_*.sql
+/reset_*_password.sql
+
+# Microsoft Office lock files.
+~$*.xlsx
 
 # Editor directories and files
 .vscode/*

@@ -18,7 +18,8 @@ export interface InvitationVerification {
   valid: boolean
   email: string | null
   storeName: string | null
-  role: 'MANAGER' | 'STAFF' | null
+  role: 'OWNER' | 'MANAGER' | 'STAFF' | null
+  accountSetupRequired: boolean
 }
 
 export const staffRoleLabel: Record<Extract<Role, 'MANAGER' | 'STAFF'>, string> = {
@@ -65,14 +66,14 @@ export async function inviteStaff(storeId: number, email: string, role: Extract<
 
 export async function verifyInvitation(token: string): Promise<InvitationVerification> {
   try {
-    const res = await apiClient.get('/staff/invitations/verify', { params: { token } })
+    const res = await apiClient.post('/staff/invitations/verify', { token })
     return unwrapApiData<InvitationVerification>(res.data)
   } catch (error) {
     throw new Error(apiErrorMessage(error, 'Không thể kiểm tra lời mời.'))
   }
 }
 
-export async function acceptInvitation(input: { token: string; fullName: string; password: string }) {
+export async function acceptInvitation(input: { token: string; fullName?: string; password?: string }) {
   try {
     const res = await apiClient.post('/staff/invitations/accept', input)
     return unwrapApiData<InvitationVerification>(res.data)

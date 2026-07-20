@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vn.inventoryai.staff.dto.AcceptInvitationRequest;
+import vn.inventoryai.staff.dto.InvitationTokenRequest;
 import vn.inventoryai.staff.dto.InvitationVerificationResponse;
 
 @RestController
@@ -12,9 +13,9 @@ import vn.inventoryai.staff.dto.InvitationVerificationResponse;
 public class PublicInvitationController {
     private final StaffInvitationService staffInvitationService;
 
-    @GetMapping("/verify")
-    InvitationVerificationResponse verify(@RequestParam String token) {
-        return staffInvitationService.verifyInvitation(token);
+    @PostMapping("/verify")
+    InvitationVerificationResponse verify(@Valid @RequestBody InvitationTokenRequest request) {
+        return staffInvitationService.verifyInvitation(request.token());
     }
 
     @PostMapping("/accept")

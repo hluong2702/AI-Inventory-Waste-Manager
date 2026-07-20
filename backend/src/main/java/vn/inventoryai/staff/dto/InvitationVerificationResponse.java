@@ -7,9 +7,10 @@ public record InvitationVerificationResponse(
         boolean valid,
         String email,
         String storeName,
-        Role role
+        Role role,
+        boolean accountSetupRequired
 ) {
     public static InvitationVerificationResponse invalid(InvitationStatus status) {
-        return new InvitationVerificationResponse(status, false, null, null, null);
+        return new InvitationVerificationResponse(status, false, null, null, null, false);
     }
 }

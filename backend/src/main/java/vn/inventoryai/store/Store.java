@@ -7,6 +7,7 @@ import vn.inventoryai.auth.AppUser;
 import vn.inventoryai.common.enums.StoreStatus;
 import vn.inventoryai.common.enums.SubscriptionPlan;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 @Getter
@@ -39,4 +40,14 @@ public class Store {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
+
+    /**
+     * Tọa độ cửa hàng dùng để gọi API thời tiết Open-Meteo.
+     * Mặc định: TP.HCM. Owner có thể cập nhật sau.
+     */
+    @Column(nullable = false, precision = 9, scale = 6)
+    private BigDecimal latitude = new BigDecimal("10.823099");
+
+    @Column(nullable = false, precision = 9, scale = 6)
+    private BigDecimal longitude = new BigDecimal("106.629662");
 }

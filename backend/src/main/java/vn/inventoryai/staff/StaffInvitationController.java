@@ -14,6 +14,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class StaffInvitationController {
     private final StaffInvitationService staffInvitationService;
+    private final InvitationMailConfigurationGuard invitationMailConfiguration;
 
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER') and @storeAccess.canAccessStore(#storeId)")
@@ -24,6 +25,7 @@ public class StaffInvitationController {
     @PostMapping("/invitations")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER') and @storeAccess.canAccessStore(#storeId)")
     List<StaffResponse> invite(@PathVariable Long storeId, @Valid @RequestBody InviteStaffRequest request) {
+        invitationMailConfiguration.assertDeliveryAvailable();
         return staffInvitationService.invite(storeId, request);
     }
 

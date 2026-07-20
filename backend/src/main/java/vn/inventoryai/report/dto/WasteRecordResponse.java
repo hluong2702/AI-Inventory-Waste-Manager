@@ -7,6 +7,8 @@ public record WasteRecordResponse(
         Long id,
         Long storeId,
         Long ingredientId,
+        String ingredientName,
+        String ingredientUnit,
         Long batchId,
         BigDecimal quantity,
         String reason,

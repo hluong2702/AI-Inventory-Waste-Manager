@@ -1,53 +1,75 @@
 package vn.inventoryai.subscription;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
-import vn.inventoryai.common.enums.SubscriptionPlan;
+import vn.inventoryai.common.observability.OperationalMetrics;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class SubscriptionMaintenanceJob {
     private final TenantSubscriptionRepository tenantSubscriptionRepository;
-    private final SubscriptionPlanRepository planRepository;
     private final SubscriptionService subscriptionService;
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final vn.inventoryai.subscription.payment.PaymentGatewayRegistry paymentGatewayRegistry;
+    private final Clock clock;
+    private final OperationalMetrics operationalMetrics;
 
-    @Scheduled(cron = "0 5 2 * * *")
-    @Transactional
+    @Scheduled(cron = "0 5 2 * * *", zone = "${app.business.time-zone:Asia/Ho_Chi_Minh}")
     public void expireAndDowngradeSubscriptions() {
-        var freePlan = planRepository.findByCodeAndActiveTrue(SubscriptionPlan.FREE)
-                .orElseThrow();
-        tenantSubscriptionRepository.findByStatusAndEndDateLessThanEqual(SubscriptionStatus.ACTIVE, LocalDate.now())
-                .forEach(active -> {
-                    var nextPlan = active.getPendingDowngradePlan() == null ? freePlan : active.getPendingDowngradePlan();
-                    subscriptionService.activateFreePlan(active.getTenant(), active, nextPlan);
-                });
+        LocalDate today = LocalDate.now(clock);
+        tenantSubscriptionRepository.findByStatusAndEndDateLessThanEqual(SubscriptionStatus.ACTIVE, today)
+                .stream()
+                .map(TenantSubscription::getId)
+                .forEach(id -> subscriptionService.expireSubscription(id, today));
     }
 
-    @Scheduled(cron = "0 */30 * * * *")
-    @Transactional
+    @Scheduled(cron = "${app.payment.reconciliation-cron:0 */2 * * * *}")
     public void reconcilePendingPayments() {
-        paymentTransactionRepository.findByStatusAndCreatedAtBefore(PaymentStatus.PENDING, java.time.Instant.now().minusSeconds(15 * 60))
-                .forEach(payment -> {
-                    var gateway = paymentGatewayRegistry.get(payment.getProvider());
-                    var status = gateway.queryStatus(payment);
-                    if (status == PaymentStatus.SUCCESS) {
-                        payment.setStatus(PaymentStatus.SUCCESS);
-                        payment.setUpdatedAt(java.time.Instant.now());
-                        subscriptionService.activatePaidSubscription(payment.getSubscription());
-                        paymentTransactionRepository.save(payment);
-                    } else if (status == PaymentStatus.FAILED) {
-                        payment.setStatus(PaymentStatus.FAILED);
-                        payment.setUpdatedAt(java.time.Instant.now());
-                        payment.getSubscription().setStatus(SubscriptionStatus.CANCELLED);
-                        tenantSubscriptionRepository.save(payment.getSubscription());
-                        paymentTransactionRepository.save(payment);
-                    }
-                });
+        paymentTransactionRepository
+                .findCreationReconciliationCandidates(Instant.now().minusSeconds(2 * 60), PageRequest.of(0, 100))
+                .forEach(this::reconcileCreation);
+        paymentTransactionRepository
+                .findReconciliationCandidates(Instant.now().minusSeconds(15 * 60), PageRequest.of(0, 100))
+                .forEach(this::reconcileOne);
+    }
+
+    private void reconcileCreation(Long paymentId) {
+        var claimed = subscriptionService.claimPaymentCreationForReconciliation(paymentId);
+        if (claimed.isEmpty()) return;
+        PaymentTransaction payment = claimed.get();
+        try {
+            var gateway = paymentGatewayRegistry.get(payment.getProvider());
+            var intent = gateway.recoverOrCreatePayment(payment, null);
+            subscriptionService.completePaymentCreationReconciliation(paymentId, intent);
+            operationalMetrics.paymentReconciliation("creation", "success");
+        } catch (RuntimeException ex) {
+            operationalMetrics.paymentReconciliation("creation", "failure");
+            log.warn("Payment creation reconciliation failed for paymentId={}", paymentId, ex);
+            subscriptionService.releasePaymentCreationReconciliation(paymentId);
+        }
+    }
+
+    private void reconcileOne(Long paymentId) {
+        var claimed = subscriptionService.claimPaymentForReconciliation(paymentId);
+        if (claimed.isEmpty()) return;
+        PaymentTransaction payment = claimed.get();
+        try {
+            var gateway = paymentGatewayRegistry.get(payment.getProvider());
+            PaymentStatus providerStatus = gateway.queryStatus(payment);
+            subscriptionService.completePaymentReconciliation(paymentId, providerStatus);
+            operationalMetrics.paymentReconciliation("status", "success");
+        } catch (RuntimeException ex) {
+            operationalMetrics.paymentReconciliation("status", "failure");
+            log.warn("Payment reconciliation failed for paymentId={}", paymentId, ex);
+            subscriptionService.releasePaymentReconciliation(paymentId);
+        }
     }
 }

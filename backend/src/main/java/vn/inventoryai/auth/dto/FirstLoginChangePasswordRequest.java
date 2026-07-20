@@ -1,8 +1,11 @@
 package vn.inventoryai.auth.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record FirstLoginChangePasswordRequest(
-        @Size(min = 8, message = "new password must be at least 8 characters") String newPassword
+        @NotBlank
+        @Size(min = 8, max = 128, message = "new password must contain between 8 and 128 characters")
+        String newPassword
 ) {
 }

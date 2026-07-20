@@ -20,9 +20,12 @@ import {
   CaretUpDown,
   X,
   List as ListIcon,
-  Check
+  Check,
+  Coffee,
+  Plugs
 } from '@phosphor-icons/react'
 import { useSubscriptionStore } from '../stores/subscriptionStore'
+import { rolesForRoute } from '../services/routeManifest'
 
 export default function Layout() {
   const { username, role, fullName, logout } = useAuth()
@@ -46,21 +49,23 @@ export default function Layout() {
 
   // Khai báo menu điều hướng kèm theo điều kiện phân quyền
   const navItems = [
-    { to: '/', label: 'Tổng quan', icon: Gauge, roles: ['STORE_OWNER', 'MANAGER', 'STAFF'], badge: 0 },
-    { to: '/stores', label: 'Cửa hàng', icon: Storefront, roles: ['STORE_OWNER', 'MANAGER'], badge: 0 },
-    { to: '/ingredients', label: 'Nguyên liệu', icon: Cube, roles: ['STORE_OWNER', 'MANAGER'], badge: 0 },
-    { to: '/transactions', label: 'Nhập / Xuất', icon: Swap, roles: ['STORE_OWNER', 'MANAGER', 'STAFF'], badge: 0 },
-    { to: '/inventory', label: 'Tồn kho', icon: Archive, roles: ['STORE_OWNER', 'MANAGER', 'STAFF'], badge: 0 },
-    { to: '/alerts', label: 'Cảnh báo', icon: Warning, roles: ['STORE_OWNER', 'MANAGER', 'STAFF'], badge: openAlertsCount },
-    { to: '/reports', label: 'Báo cáo', icon: ChartBar, roles: ['STORE_OWNER', 'MANAGER'], badge: 0 },
-    { to: '/forecast', label: 'Dự báo nhập', icon: TrendUp, roles: ['STORE_OWNER', 'MANAGER'], badge: 0 },
-    { to: '/settings/staff', label: 'Nhân viên', icon: UsersThree, roles: ['STORE_OWNER', 'MANAGER'], badge: 0 },
-    { to: '/billing', label: 'Gói dịch vụ', icon: CreditCard, roles: ['STORE_OWNER'], badge: 0 },
+    { to: '/', label: 'Tổng quan', icon: Gauge, badge: 0 },
+    { to: '/stores', label: 'Cửa hàng', icon: Storefront, badge: 0 },
+    { to: '/recipes', label: 'Công thức', icon: Coffee, badge: 0 },
+    { to: '/integrations/pos', label: 'Tích hợp POS', icon: Plugs, badge: 0 },
+    { to: '/ingredients', label: 'Nguyên liệu', icon: Cube, badge: 0 },
+    { to: '/transactions', label: 'Nhập / Xuất', icon: Swap, badge: 0 },
+    { to: '/inventory', label: 'Tồn kho', icon: Archive, badge: 0 },
+    { to: '/alerts', label: 'Cảnh báo', icon: Warning, badge: openAlertsCount },
+    { to: '/reports', label: 'Báo cáo', icon: ChartBar, badge: 0 },
+    { to: '/forecast', label: 'Dự báo nhập', icon: TrendUp, badge: 0 },
+    { to: '/settings/staff', label: 'Nhân viên', icon: UsersThree, badge: 0 },
+    { to: '/billing', label: 'Gói dịch vụ', icon: CreditCard, badge: 0 },
   ]
 
   // Lọc menu theo vai trò hiện tại
   const allowedNavItems = navItems.filter(
-    (item) => !item.roles || item.roles.includes(role || '')
+    (item) => role !== null && rolesForRoute(item.to).includes(role)
   )
 
   function handleLogout() {
@@ -260,13 +265,20 @@ export default function Layout() {
               <button onClick={() => setLimitBanner(null)} className="ml-3 underline">Ẩn</button>
             </div>
           )}
-          <button
-            onClick={() => navigate('/billing')}
-            className="rounded-full border border-ink/10 bg-white px-3 py-1.5 text-[11px] font-bold text-ink shadow-sm"
-          >
-            Gói {subscription.plan}
-            {subscription.expiresAt ? ` · hết hạn ${subscription.expiresAt}` : ''}
-          </button>
+          {role === 'STORE_OWNER' ? (
+            <button
+              onClick={() => navigate('/billing')}
+              className="rounded-full border border-ink/10 bg-white px-3 py-1.5 text-[11px] font-bold text-ink shadow-sm"
+            >
+              Gói {subscription.plan}
+              {subscription.expiresAt ? ` · hết hạn ${subscription.expiresAt}` : ''}
+            </button>
+          ) : (
+            <span className="rounded-full border border-ink/10 bg-white px-3 py-1.5 text-[11px] font-bold text-ink shadow-sm">
+              Gói {subscription.plan}
+              {subscription.expiresAt ? ` · hết hạn ${subscription.expiresAt}` : ''}
+            </span>
+          )}
         </div>
         <Outlet />
       </main>

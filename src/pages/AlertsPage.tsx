@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, Alert, Ingredient } from '../types'
+import type { ApiResponse, Alert, AlertType, Ingredient } from '../types'
 import { useStore } from '../context/StoreContext'
+import { useAuth } from '../context/AuthContext'
 // DoubleBezelCard not used in AlertsPage
 import StateView from '../components/StateView'
 import { formatDate } from '../utils/fefo'
@@ -16,14 +17,15 @@ import {
 
 export default function AlertsPage() {
   const { activeStore } = useStore()
+  const { role } = useAuth()
   const queryClient = useQueryClient()
   
-  // Lọc theo loại cảnh báo: 'ALL' | 'EXPIRY' | 'LOW_STOCK'
-  const [filterType, setFilterType] = useState<'ALL' | 'EXPIRY' | 'LOW_STOCK'>('ALL')
+  // Lọc theo đúng hai loại cảnh báo backend hỗ trợ.
+  const [filterType, setFilterType] = useState<'ALL' | AlertType>('ALL')
 
   // 1. Tải danh sách nguyên liệu để hiển thị thông tin đi kèm
   const { data: ingResponse } = useQuery({
-    queryKey: ['ingredients'],
+    queryKey: ['ingredients', activeStore?.id],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<Ingredient[]>>('/ingredients')
       return res.data
@@ -84,12 +86,12 @@ export default function AlertsPage() {
             Tất cả ({alerts.length})
           </button>
           <button
-            onClick={() => setFilterType('EXPIRY')}
+            onClick={() => setFilterType('EXPIRING_SOON')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              filterType === 'EXPIRY' ? 'bg-white text-sage-dark shadow-sm' : 'text-ink/60 hover:text-ink'
+              filterType === 'EXPIRING_SOON' ? 'bg-white text-sage-dark shadow-sm' : 'text-ink/60 hover:text-ink'
             }`}
           >
-            Cận / Quá hạn ({alerts.filter(a => a.type === 'EXPIRY').length})
+            Cận / Quá hạn ({alerts.filter(a => a.type === 'EXPIRING_SOON').length})
           </button>
           <button
             onClick={() => setFilterType('LOW_STOCK')}
@@ -112,7 +114,7 @@ export default function AlertsPage() {
         <div className="space-y-4 max-w-4xl">
           {filteredAlerts.map((alert) => {
             const ing = ingredients.find((i) => i.id === alert.itemId)
-            const isExpiry = alert.type === 'EXPIRY'
+            const isExpiry = alert.type === 'EXPIRING_SOON'
 
             return (
               <div 
@@ -150,7 +152,7 @@ export default function AlertsPage() {
 
                   {/* Nút hành động */}
                   <div className="shrink-0 flex gap-2 w-full sm:w-auto justify-end border-t sm:border-t-0 pt-2.5 sm:pt-0 border-ink/5">
-                    {alert.status === 'OPEN' ? (
+                    {alert.status === 'OPEN' && role !== 'STAFF' ? (
                       <button
                         onClick={() => handleResolve(alert.id)}
                         disabled={resolveAlertMutation.isPending}
@@ -159,10 +161,12 @@ export default function AlertsPage() {
                         <CheckCircle size={14} />
                         <span>Đánh dấu đã xử lý</span>
                       </button>
-                    ) : (
+                    ) : alert.status === 'RESOLVED' ? (
                       <span className="inline-flex items-center gap-0.5 bg-sage/10 text-sage-dark px-2.5 py-1 rounded-lg text-xs font-bold">
                         Đã xử lý
                       </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold text-ink/45">Chờ quản lý xử lý</span>
                     )}
                   </div>
 

@@ -11,7 +11,7 @@ import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 import vn.inventoryai.common.error.AppException;
 import vn.inventoryai.common.error.ErrorCode;
-import vn.inventoryai.common.security.UserPrincipal;
+import vn.inventoryai.common.security.SecurityUtils;
 import vn.inventoryai.subscription.SubscriptionService;
 
 @Component
@@ -33,10 +33,11 @@ public class FeatureAccessInterceptor implements HandlerInterceptor {
         }
 
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !(authentication.getPrincipal() instanceof UserPrincipal principal) || principal.storeId() == null) {
+        Long selectedTenantId = SecurityUtils.storeId();
+        if (authentication == null || !authentication.isAuthenticated() || selectedTenantId == null) {
             throw new AppException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "Authentication required");
         }
-        if (!subscriptionService.hasFeature(principal.storeId(), annotation.value())) {
+        if (!subscriptionService.hasFeature(selectedTenantId, annotation.value())) {
             throw new AppException(ErrorCode.PLAN_LIMIT_EXCEEDED, HttpStatus.PAYMENT_REQUIRED, "Current subscription does not include feature " + annotation.value());
         }
         return true;

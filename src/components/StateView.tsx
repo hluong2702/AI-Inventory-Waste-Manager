@@ -8,6 +8,7 @@ interface StateViewProps {
   emptyTitle?: string
   emptySubtitle?: string
   loadingCount?: number
+  onRetry?: () => void
   children: ReactNode
 }
 
@@ -22,6 +23,7 @@ export default function StateView({
   emptyTitle = 'Không có dữ liệu',
   emptySubtitle = 'Chưa có thông tin hiển thị ở mục này.',
   loadingCount = 3,
+  onRetry,
   children,
 }: StateViewProps) {
   if (isError) {
@@ -30,6 +32,15 @@ export default function StateView({
         <span className="text-3xl mb-2">⚠️</span>
         <h4 className="font-bold text-sm">Lỗi tải dữ liệu</h4>
         <p className="text-xs text-ink/80 mt-1 max-w-md">{errorMessage}</p>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-4 rounded-lg border border-terracotta/25 bg-white px-3 py-2 text-xs font-bold text-terracotta transition-colors hover:bg-terracotta/5"
+          >
+            Thử tải lại
+          </button>
+        )}
       </div>
     )
   }

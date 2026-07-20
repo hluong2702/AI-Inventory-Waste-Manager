@@ -1,7 +1,13 @@
 import { create } from 'zustand'
-import type { AuthResponse, AuthSession, Role, SessionUser, Store } from '../types'
+import type { AuthSession, Role, SessionUser, Store } from '../types'
+import { clearAccessToken } from '../auth/tokenStore'
 
 const AUTH_SESSION_KEY = 'inventoryai_auth_session_v1'
+
+// Remove credentials persisted by older frontend versions. Session metadata may remain,
+// while access credentials live in memory and the refresh credential lives in HttpOnly cookie.
+localStorage.removeItem('accessToken')
+localStorage.removeItem('refreshToken')
 
 interface AuthState {
   currentUser: SessionUser | null
@@ -15,7 +21,6 @@ interface AuthState {
   mustChangePassword: boolean
   isAuthenticated: boolean
   hydrate: () => void
-  setAuth: (auth: AuthResponse) => void
   setSession: (session: AuthSession) => void
   setCurrentStore: (store: Store) => void
   clearAuth: () => void
@@ -23,7 +28,22 @@ interface AuthState {
 
 function readSession(): AuthSession | null {
   const raw = localStorage.getItem(AUTH_SESSION_KEY)
-  return raw ? (JSON.parse(raw) as AuthSession) : null
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as AuthSession & { accessToken?: string; refreshToken?: string }
+    const sanitized: AuthSession = {
+      currentUser: parsed.currentUser,
+      currentStore: parsed.currentStore,
+      stores: parsed.stores,
+    }
+    if (parsed.accessToken || parsed.refreshToken) {
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sanitized))
+    }
+    return sanitized
+  } catch {
+    localStorage.removeItem(AUTH_SESSION_KEY)
+    return null
+  }
 }
 
 const savedSession = readSession()
@@ -38,7 +58,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   fullName: savedSession?.currentUser.fullName ?? localStorage.getItem('fullName'),
   storeIds: savedSession?.currentUser.storeIds ?? (JSON.parse(localStorage.getItem('storeIds') ?? '[]') as number[]),
   mustChangePassword: savedSession?.currentUser.mustChangePassword ?? false,
-  isAuthenticated: !!savedSession || !!localStorage.getItem('accessToken'),
+  isAuthenticated: !!savedSession,
   hydrate: () => {
     const session = readSession()
     set({
@@ -51,33 +71,11 @@ export const useAuthStore = create<AuthState>((set) => ({
       fullName: session?.currentUser.fullName ?? localStorage.getItem('fullName'),
       storeIds: session?.currentUser.storeIds ?? (JSON.parse(localStorage.getItem('storeIds') ?? '[]') as number[]),
       mustChangePassword: session?.currentUser.mustChangePassword ?? false,
-      isAuthenticated: !!session || !!localStorage.getItem('accessToken'),
-    })
-  },
-  setAuth: (auth) => {
-    localStorage.setItem('accessToken', auth.accessToken)
-    localStorage.setItem('refreshToken', auth.refreshToken)
-    localStorage.setItem('username', auth.username)
-    localStorage.setItem('email', auth.email)
-    localStorage.setItem('role', auth.role)
-    localStorage.setItem('fullName', auth.fullName)
-    localStorage.setItem('storeIds', JSON.stringify(auth.storeIds))
-    if (auth.activeStoreId) {
-      localStorage.setItem('activeStoreId', String(auth.activeStoreId))
-    }
-    set({
-      username: auth.username,
-      email: auth.email,
-      role: auth.role,
-      fullName: auth.fullName,
-      storeIds: auth.storeIds,
-      mustChangePassword: false,
-      isAuthenticated: true,
+      isAuthenticated: !!session,
     })
   },
   setSession: (session) => {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session))
-    localStorage.setItem('accessToken', session.accessToken)
     localStorage.setItem('username', session.currentUser.username)
     localStorage.setItem('email', session.currentUser.email)
     localStorage.setItem('role', session.currentUser.role)
@@ -110,12 +108,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem(AUTH_SESSION_KEY)
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
+    clearAccessToken()
     localStorage.removeItem('username')
     localStorage.removeItem('email')
     localStorage.removeItem('role')
     localStorage.removeItem('fullName')
     localStorage.removeItem('storeIds')
     localStorage.removeItem('activeStoreId')
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('payment-idempotency:')) sessionStorage.removeItem(key)
+    }
     set({
       currentUser: null,
       currentStore: null,

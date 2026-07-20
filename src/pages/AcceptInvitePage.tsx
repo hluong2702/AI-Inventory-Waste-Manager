@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowRight, CheckCircle, Lock, User, WarningCircle } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import * as zod from 'zod'
 import { acceptInvitation, verifyInvitation, type InvitationVerification } from '../services/staffService'
 
@@ -34,8 +34,11 @@ const statusCopy = {
 
 export default function AcceptInvitePage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const token = searchParams.get('token') ?? ''
+  const token = useMemo(() => {
+    const fragmentToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token')
+    // Keep old links usable during the rollout, but remove either form before any API call.
+    return fragmentToken ?? new URLSearchParams(window.location.search).get('token') ?? ''
+  }, [])
   const [verification, setVerification] = useState<InvitationVerification | null>(null)
   const [isVerifying, setIsVerifying] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -48,6 +51,12 @@ export default function AcceptInvitePage() {
   })
 
   useEffect(() => {
+    if (token) {
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+  }, [token])
+
+  useEffect(() => {
     let isMounted = true
     async function run() {
       setIsVerifying(true)
@@ -55,7 +64,7 @@ export default function AcceptInvitePage() {
       try {
         const result = token
           ? await verifyInvitation(token)
-          : { status: 'INVALID' as const, valid: false, email: null, storeName: null, role: null }
+          : { status: 'INVALID' as const, valid: false, email: null, storeName: null, role: null, accountSetupRequired: false }
         if (isMounted) setVerification(result)
       } catch (err) {
         if (isMounted) setError(err instanceof Error ? err.message : 'Không thể kiểm tra lời mời.')
@@ -89,18 +98,41 @@ export default function AcceptInvitePage() {
     }
   }
 
+  async function acceptExistingAccount() {
+    if (!token) return
+    setIsSubmitting(true)
+    setError(null)
+    try {
+      await acceptInvitation({ token })
+      setIsAccepted(true)
+      window.setTimeout(() => navigate('/login', { replace: true }), 1300)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Không thể chấp nhận lời mời.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   return (
     <div className="min-h-[100dvh] bg-offwhite p-4 text-ink md:p-8">
       <div className="mx-auto grid min-h-[calc(100dvh-2rem)] max-w-5xl grid-cols-1 overflow-hidden rounded-[28px] border border-ink/10 bg-white shadow-2xl md:grid-cols-12">
         <section className="bg-sage-dark p-8 text-white md:col-span-5 md:p-10">
           <div>
             <h1 className="text-lg font-extrabold">AI Inventory</h1>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-white/45">Staff activation</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-white/45">
+              {verification?.role === 'OWNER' ? 'Owner verification' : 'Staff activation'}
+            </p>
           </div>
           <div className="mt-16 max-w-sm">
-            <h2 className="text-2xl font-bold leading-tight">Kích hoạt tài khoản nhân viên.</h2>
+            <h2 className="text-2xl font-bold leading-tight">
+              {verification?.role === 'OWNER' ? 'Xác minh tài khoản chủ cửa hàng.' : 'Kích hoạt tài khoản nhân viên.'}
+            </h2>
             <p className="mt-3 text-sm leading-6 text-white/70">
-              Hoàn tất hồ sơ và đặt mật khẩu để truy cập store được phân quyền.
+              {!verification?.valid
+                ? 'Kiểm tra liên kết lời mời trước khi tiếp tục.'
+                : verification.accountSetupRequired
+                  ? 'Hoàn tất hồ sơ và đặt mật khẩu để truy cập cửa hàng được phân quyền.'
+                  : 'Xác nhận để thêm cửa hàng này vào tài khoản hiện có của bạn.'}
             </p>
           </div>
           {verification?.valid && (
@@ -134,10 +166,29 @@ export default function AcceptInvitePage() {
                 <ArrowRight size={17} />
               </Link>
             </div>
+          ) : verification?.accountSetupRequired === false ? (
+            <div className="w-full">
+              <h2 className="text-2xl font-bold tracking-tight">Tham gia cửa hàng</h2>
+              <p className="mt-2 text-sm leading-6 text-ink/60">
+                Tài khoản {verification.email} đã tồn tại. Xác nhận để thêm quyền {verification.role} tại {verification.storeName}; mật khẩu hiện tại không thay đổi.
+              </p>
+              {error && <div className="mt-5 rounded-xl border border-terracotta/20 bg-terracotta/10 px-4 py-3 text-sm font-semibold text-terracotta">{error}</div>}
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={acceptExistingAccount}
+                className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-sage-dark px-4 py-3 text-sm font-bold text-white transition hover:bg-sage disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmitting ? 'Đang xác nhận...' : 'Tham gia cửa hàng'}
+                <ArrowRight size={17} />
+              </button>
+            </div>
           ) : (
             <form onSubmit={handleSubmit(onSubmit)} className="w-full space-y-5">
               <div>
-                <h2 className="text-2xl font-bold tracking-tight">Chấp nhận lời mời</h2>
+                <h2 className="text-2xl font-bold tracking-tight">
+                  {verification?.role === 'OWNER' ? 'Xác minh email chủ cửa hàng' : 'Chấp nhận lời mời'}
+                </h2>
                 <p className="mt-1 text-sm text-ink/55">Đặt thông tin đăng nhập cho {verification?.email}.</p>
               </div>
 

@@ -1,0 +1,38 @@
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/inventory_ai?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:123456}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+
+springdoc:
+  api-docs:
+    enabled: true
+
+app:
+  cache:
+    namespace: ${CACHE_NAMESPACE:inventoryai:dev:v3}
+    subscription-ttl: ${SUBSCRIPTION_CACHE_TTL:5m}
+  frontend:
+    login-url: ${FRONTEND_LOGIN_URL:http://localhost:5173/login}
+    invite-url: ${FRONTEND_INVITE_URL:http://localhost:5173/accept-invite}
+  invitation-email:
+    enabled: ${INVITATION_EMAIL_ENABLED:false}
+  payment:
+    payos:
+      return-url: ${PAYOS_RETURN_URL:http://localhost:5173/billing?payment=success}
+      cancel-url: ${PAYOS_CANCEL_URL:http://localhost:5173/billing?payment=failed}
+  jwt:
+    secret: ${JWT_SECRET:local-dev-7Fj2qL9xT4mK8pR6wN3cV5bH1sD0yU7eA9gC2zX4}
+  cors:
+    allowed-origins:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+  auth:
+    refresh-cookie:
+      secure: false

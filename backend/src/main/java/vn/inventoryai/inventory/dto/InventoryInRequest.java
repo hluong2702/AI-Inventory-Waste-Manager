@@ -1,15 +1,16 @@
 package vn.inventoryai.inventory.dto;
 
-import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
 public record InventoryInRequest(
-        @NotNull Long ingredientId,
-        @NotNull @DecimalMin("0.001") BigDecimal quantity,
+        @NotNull @Positive Long ingredientId,
+        @NotNull @Positive @Digits(integer = 11, fraction = 3) BigDecimal quantity,
         @NotNull @FutureOrPresent LocalDate expiryDate
 ) {
 }

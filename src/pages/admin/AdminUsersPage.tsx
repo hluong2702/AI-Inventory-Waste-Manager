@@ -57,7 +57,9 @@ export default function AdminUsersPage() {
     const matchSearch = 
       u.username.toLowerCase().includes(search.toLowerCase()) ||
       u.fullName.toLowerCase().includes(search.toLowerCase())
-    const matchRole = filterRole === 'ALL' || u.role === filterRole
+    const matchRole = filterRole === 'ALL'
+      || u.role === filterRole
+      || u.memberships.some((membership) => membership.role === filterRole)
     return matchSearch && matchRole
   })
 
@@ -133,10 +135,9 @@ export default function AdminUsersPage() {
               </tr>
             ) : (
               filtered.map((user) => {
-                const knownRole = isBackendRole(user.role) ? user.role : null
-                const Icon = knownRole ? roleIcon[knownRole] : UserIcon
-                const label = knownRole ? roleLabel[knownRole] : `Không xác định (${user.role || 'N/A'})`
-                const badgeClass = knownRole ? roleBadgeClass[knownRole] : unknownRoleBadgeClass
+                const effectiveRoles = user.memberships.length > 0
+                  ? user.memberships
+                  : [{ storeId: user.storeId ?? 0, storeName: 'Hệ thống', role: user.role, status: user.status }]
                 return (
                   <tr key={user.id} className="hover:bg-white/5 transition-colors">
                     <td className="px-6 py-4">
@@ -151,11 +152,21 @@ export default function AdminUsersPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 font-mono text-white/50">@{user.username}</td>
-                    <td className="px-6 py-4 text-center">
-                      <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full border ${badgeClass}`}>
-                        <Icon size={9} />
-                        {label}
-                      </span>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap justify-center gap-1.5">
+                        {effectiveRoles.map((membership) => {
+                          const knownRole = isBackendRole(membership.role) ? membership.role : null
+                          const Icon = knownRole ? roleIcon[knownRole] : UserIcon
+                          const label = knownRole ? roleLabel[knownRole] : `Không xác định (${membership.role || 'N/A'})`
+                          const badgeClass = knownRole ? roleBadgeClass[knownRole] : unknownRoleBadgeClass
+                          return (
+                            <span key={`${membership.storeId}:${membership.role}`} title={`${membership.storeName} · ${membership.status}`} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${badgeClass}`}>
+                              <Icon size={9} />
+                              {label} · {membership.storeName}
+                            </span>
+                          )
+                        })}
+                      </div>
                     </td>
                   </tr>
                 )

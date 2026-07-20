@@ -2,20 +2,16 @@ package vn.inventoryai.staff;
 
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GmailEmailService implements EmailService {
     private final JavaMailSender mailSender;
 
-    @Async
     @Override
     public void sendStaffInvitationEmail(String toEmail, String storeName, String invitationUrl) {
         try {
@@ -23,14 +19,24 @@ public class GmailEmailService implements EmailService {
             MimeMessageHelper helper = new MimeMessageHelper(message, "UTF-8");
 
             helper.setTo(toEmail);
-            helper.setSubject("Lời mời tham gia " + storeName + " trên AI Inventory");
+            helper.setSubject("Lời mời tham gia " + sanitizeHeader(storeName) + " trên AI Inventory");
             helper.setText(buildInvitationHtml(storeName, invitationUrl), true);
 
             mailSender.send(message);
-            log.info("Sent staff invitation email to {}", toEmail);
         } catch (Exception ex) {
-            log.error("Failed to send staff invitation email to {}: {}", toEmail, ex.getMessage(), ex);
+            throw new EmailDeliveryException(ex);
         }
+    }
+
+    private String sanitizeHeader(String value) {
+        if (value == null) {
+            return "cửa hàng";
+        }
+        String sanitized = value.replaceAll("[\\p{Cntrl}]", " ").replaceAll("\\s+", " ").trim();
+        if (sanitized.isBlank()) {
+            return "cửa hàng";
+        }
+        return sanitized.length() <= 100 ? sanitized : sanitized.substring(0, 100);
     }
 
     private String buildInvitationHtml(String storeName, String invitationUrl) {

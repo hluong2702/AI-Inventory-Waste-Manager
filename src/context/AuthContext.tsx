@@ -1,7 +1,11 @@
 import { createContext, useContext, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { Role } from '../types'
-import { loginWithPassword, registerOwner } from '../services/authService'
+import { loginWithPassword, logoutSession, registerOwner } from '../services/authService'
+import type { RegistrationResult } from '../services/authService'
 import { useAuthStore } from '../stores/authStore'
+import { useStoreContextStore } from '../stores/storeContextStore'
+import { useSubscriptionStore } from '../stores/subscriptionStore'
 
 interface AuthContextValue {
   username: string | null
@@ -13,18 +17,29 @@ interface AuthContextValue {
     storeName: string
     email: string
     password: string
-  }) => Promise<void>
-  logout: () => void
+  }) => Promise<RegistrationResult>
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const { username, role, fullName, isAuthenticated, setSession, clearAuth } = useAuthStore()
+
+  async function replaceSession(session: Awaited<ReturnType<typeof loginWithPassword>>) {
+    // A request from the previous account must never populate the next account's cache.
+    await queryClient.cancelQueries()
+    useStoreContextStore.getState().reset()
+    useSubscriptionStore.getState().reset()
+    setSession(session)
+    useStoreContextStore.getState().setStores(session.stores)
+    queryClient.clear()
+  }
 
   async function login(email: string, password: string) {
     const session = await loginWithPassword(email, password)
-    setSession(session)
+    await replaceSession(session)
   }
 
   async function register(registerData: {
@@ -32,12 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string
     password: string
   }) {
-    const session = await registerOwner(registerData)
-    setSession(session)
+    return registerOwner(registerData)
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await logoutSession()
+    } catch {
+      // Local logout must still complete if the token has already expired.
+    }
     clearAuth()
+    useStoreContextStore.getState().reset()
+    useSubscriptionStore.getState().reset()
+    queryClient.clear()
   }
 
   return (

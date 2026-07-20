@@ -4,11 +4,13 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as zod from 'zod'
 import apiClient from '../api/client'
+import { useStore } from '../context/StoreContext'
 import type { ApiResponse, Ingredient, IngredientImportResult } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useSubscriptionStore } from '../stores/subscriptionStore'
 import StateView from '../components/StateView'
 import { Plus, Pencil, Trash, X, Cube, Tag, Check, ShieldWarning, UploadSimple, DownloadSimple } from '@phosphor-icons/react'
+import { apiErrorMessage } from '../utils/apiResponse'
 
 // Schema validate cho Nguyên liệu F&B
 const ingredientSchema = zod.object({
@@ -28,6 +30,7 @@ const ingredientSchema = zod.object({
 type IngredientFormValues = zod.infer<typeof ingredientSchema>
 
 export default function IngredientsPage() {
+  const { activeStore } = useStore()
   const { role } = useAuth()
   const { current: subscription, isAtLimit, setLimitBanner } = useSubscriptionStore()
   const queryClient = useQueryClient()
@@ -37,7 +40,7 @@ export default function IngredientsPage() {
 
   // 1. Tải danh sách nguyên liệu
   const { data: response, isLoading, isError } = useQuery({
-    queryKey: ['ingredients'],
+    queryKey: ['ingredients', activeStore?.id],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<Ingredient[]>>('/ingredients')
       return res.data
@@ -143,7 +146,7 @@ export default function IngredientsPage() {
   }
 
   function handleDelete(id: number) {
-    if (confirm('Bạn có chắc muốn dừng hoạt động nguyên liệu này? Dữ liệu lịch sử lô hàng vẫn sẽ được giữ lại.')) {
+    if (confirm('Bạn có chắc muốn lưu trữ nguyên liệu này? Thao tác chỉ thành công khi toàn bộ tồn kho, kể cả lô đã hết hạn, đã được xử lý về 0.')) {
       deleteMutation.mutate(id)
     }
   }
@@ -167,6 +170,7 @@ export default function IngredientsPage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending
   const ingredientLimitReached = isAtLimit('ingredients', ingredients.length)
+  const mutationError = createMutation.error ?? updateMutation.error ?? deleteMutation.error
 
   return (
     <div className="space-y-6 font-sans">
@@ -206,6 +210,12 @@ export default function IngredientsPage() {
       {importMessage && (
         <div className="rounded-xl border border-sage/20 bg-sage/10 px-4 py-3 text-xs font-semibold text-sage-dark">
           {importMessage}
+        </div>
+      )}
+
+      {mutationError && (
+        <div className="rounded-xl border border-terracotta/20 bg-terracotta/10 px-4 py-3 text-xs font-semibold text-terracotta">
+          {apiErrorMessage(mutationError, 'Không thể lưu thay đổi nguyên liệu.')}
         </div>
       )}
 

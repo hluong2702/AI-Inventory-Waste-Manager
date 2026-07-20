@@ -1,6 +1,7 @@
 import type { AuthSession, SessionUser, Store } from '../types'
 import apiClient from '../api/client'
 import { apiErrorMessage, unwrapApiData } from '../utils/apiResponse'
+import { setAccessToken } from '../auth/tokenStore'
 
 interface RegisterOwnerInput {
   storeName: string
@@ -8,9 +9,15 @@ interface RegisterOwnerInput {
   password: string
 }
 
+export interface RegistrationResult {
+  verificationRequired: boolean
+  email: string
+  expiresInHours: number
+}
+
 interface BackendAuthResponse {
   accessToken: string
-  refreshToken: string
+  refreshToken: string | null
   userId: number
   storeId: number | null
   role: 'SYSTEM_ADMIN' | 'OWNER' | 'MANAGER' | 'STAFF'
@@ -22,11 +29,13 @@ function mapBackendRole(role: BackendAuthResponse['role']) {
 }
 
 function buildBackendSession(auth: BackendAuthResponse, email: string, storeName?: string): AuthSession {
+  setAccessToken(auth.accessToken)
   const mappedRole = mapBackendRole(auth.role)
   const currentStore: Store = {
     id: auth.storeId ?? 0,
     name: auth.storeId ? (storeName ?? `Store #${auth.storeId}`) : 'System Admin',
     address: '',
+    phone: null,
     subscriptionPlan: 'FREE',
     status: 'ACTIVE',
   }
@@ -45,8 +54,11 @@ function buildBackendSession(auth: BackendAuthResponse, email: string, storeName
     currentUser,
     currentStore,
     stores: auth.storeId ? [currentStore] : [],
-    accessToken: auth.accessToken,
   }
+}
+
+export async function logoutSession() {
+  await apiClient.post('/auth/logout', {})
 }
 
 export async function registerOwner(input: RegisterOwnerInput) {
@@ -56,7 +68,7 @@ export async function registerOwner(input: RegisterOwnerInput) {
       email: input.email,
       password: input.password,
     })
-    return buildBackendSession(unwrapApiData<BackendAuthResponse>(res.data), input.email, input.storeName)
+    return unwrapApiData<RegistrationResult>(res.data)
   } catch (error) {
     throw new Error(apiErrorMessage(error, 'Không thể đăng ký tài khoản.'))
   }

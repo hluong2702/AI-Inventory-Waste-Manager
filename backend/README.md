@@ -1,170 +1,143 @@
 # AI Inventory & Waste Manager Backend
 
-Spring Boot 3.x / Java 21 backend scaffold for a shared-database multi-tenant SaaS.
+Spring Boot 3 / Java 21 backend for a shared-schema, multi-tenant F&B SaaS.
 
-## 1. Schema DB
+## Local development
 
-Migrations:
-
-- `src/main/resources/db/migration/V1__init_multi_tenant_schema.sql`
-- `src/main/resources/db/migration/V2__seed_demo_data.sql`
-
-Tenant separation:
-
-- `stores`: tenant root.
-- `users.store_id`: nullable only for `SYSTEM_ADMIN`.
-- Business tables with mandatory `store_id`: `ingredients`, `inventory_batches`, `stock_transactions`, `waste_records`, `alerts`, `subscriptions`.
-- Repository methods always query by `storeId` for business data, for example `findByIdAndStoreIdAndDeletedFalse`.
-
-## 2. Security Config
-
-Security files:
-
-- `common/security/SecurityConfig.java`
-- `common/security/JwtAuthenticationFilter.java`
-- `common/security/MustChangePasswordFilter.java`
-- `common/security/JwtUtil.java`
-- `common/security/TenantContext.java`
-- `common/security/StoreAccessService.java`
-
-JWT claims:
-
-- `userId`
-- `storeId`
-- `role`
-- `mustChangePassword`
-
-Business endpoints do not trust `store_id` from request body. They read `storeId` from JWT through `SecurityUtils.principal()`. For endpoints that contain `{storeId}`, `StoreAccessService` rejects mismatches to prevent IDOR.
-
-## 3. Auth
-
-Files:
-
-- `auth/AuthController.java`
-- `auth/AuthService.java`
-
-Endpoints:
-
-- `POST /api/auth/register`: creates Store + FREE Subscription + OWNER in one transaction.
-- `POST /api/auth/login`: blocks disabled users and returns access + refresh token.
-- `POST /api/auth/first-login-change-password`: only valid when `must_change_password=true`, activates invited users.
-
-## 4. Staff Invitations
-
-Files:
-
-- `staff/StaffInvitationController.java`
-- `staff/StaffInvitationService.java`
-- `staff/EmailService.java`
-- `staff/ConsoleEmailService.java`
-
-Endpoint:
-
-- `POST /api/stores/{storeId}/staff/invitations`
-
-Rules:
-
-- OWNER and MANAGER can invite STAFF.
-- OWNER can invite MANAGER.
-- MANAGER cannot invite another MANAGER.
-- `{storeId}` must match JWT `storeId`.
-- Staff limit is checked against `subscriptions.max_staff`.
-- Temporary password is generated, BCrypt-hashed, and sent through `EmailService`.
-
-## 5. Inventory FEFO
-
-Files:
-
-- `inventory/InventoryController.java`
-- `inventory/InventoryService.java`
-
-Endpoints:
-
-- `POST /api/inventory/in`
-- `POST /api/inventory/out`
-
-FEFO logic:
-
-1. Sum available stock by `storeId + ingredientId`.
-2. Reject with `INSUFFICIENT_STOCK` if total quantity is not enough.
-3. Load batches ordered by `expiryDate ASC, receivedAt ASC` with pessimistic write lock.
-4. Deduct earliest-expiring batches first.
-5. Create one OUT transaction per deducted batch.
-
-## 6. Scheduled Alerts
-
-File:
-
-- `alert/AlertJob.java`
-
-Runs daily at `02:15`, creates unresolved alerts for:
-
-- batches expiring within `app.alerts.expiring-days`
-- ingredients whose current stock is below `min_stock`
-
-## 7. Forecast
-
-Files:
-
-- `forecast/ForecastController.java`
-- `forecast/ForecastService.java`
-
-Endpoint:
-
-- `GET /api/forecast?ingredientId=xxx&days=7`
-
-Formula:
-
-`Recommended = AvgDailyUsage * Days + MinStock - CurrentStock`
-
-`AvgDailyUsage` comes from OUT transactions in the recent window.
-
-## 8. Admin APIs
-
-Files:
-
-- `admin/AdminController.java`
-- `admin/AdminService.java`
-
-Endpoints:
-
-- `GET /api/admin/dashboard`
-- `GET /api/admin/stores?plan=FREE&status=ACTIVE`
-- `PATCH /api/admin/stores/{id}/status`
-
-Admin endpoints require `ROLE_SYSTEM_ADMIN`.
-
-## Demo Seed Accounts
-
-Flyway migration `V2__seed_demo_data.sql` creates these accounts:
-
-| Role | Email | Password |
-| --- | --- | --- |
-| SYSTEM_ADMIN | `admin@inventoryai.vn` | `admin123` |
-| OWNER | `owner@coffee.vn` | `owner123` |
-| MANAGER | `manager@coffee.vn` | `manager123` |
-| STAFF | `staff@coffee.vn` | `staff123` |
-| OWNER | `ownerb@coffee.vn` | `owner123` |
-
-Seed data also creates 3 stores, subscriptions, ingredients, inventory batches, stock transactions, waste records, and open alerts.
-
-## Local Requirements
-
-- JDK 21
-- Working Gradle installation or Gradle wrapper
-- MySQL database `inventory_ai`
-- Redis
-
-This backend pins Gradle to the installed JDK 21 through `gradle.properties`:
-
-```properties
-org.gradle.java.home=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
-```
-
-If your shell still reports Java 17 because SDKMAN is first in `PATH`, either update SDKMAN's active Java or run Gradle with:
+Requirements: JDK 21, MySQL 8, Redis, and Node.js for the frontend.
 
 ```bash
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home gradle bootRun
+cd backend
+SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
 ```
 
-Current machine note: JDK 21 is installed and `gradle build` succeeds when Gradle is allowed to write to `~/.gradle`.
+The `dev` profile provides loopback-only defaults. Production has no default database password,
+Redis URL, JWT secret, CORS origin, or frontend URL and therefore fails fast when required
+configuration is absent.
+
+`BUSINESS_TIME_ZONE` defines inventory expiry, forecasts, reports, admin day metrics, and
+subscription period boundaries consistently. It defaults to `Asia/Ho_Chi_Minh`; database
+timestamps remain UTC.
+
+Run the backend tests with:
+
+```bash
+./gradlew quality --no-daemon
+```
+
+`quality` runs unit/integration tests plus Checkstyle. `securityAudit` runs OWASP Dependency-Check
+and fails on known vulnerabilities with CVSS 7 or higher; CI should provide `NVD_API_KEY`.
+
+## Operations and observability
+
+- Every HTTP response includes `X-Correlation-ID`; a safe caller-provided value is preserved and
+  added to the logging MDC, otherwise the backend generates a UUID.
+- `/actuator/health` is public for infrastructure probes. Other actuator endpoints require a
+  `SYSTEM_ADMIN` token, and only `health`, `info`, and `metrics` are exposed over HTTP.
+- Bounded-tag counters cover payment reconciliation, invitation-email delivery, and per-store
+  alert generation outcomes under the `inventoryai.*` metric namespace.
+
+## Tenant and authorization model
+
+- `stores` is the tenant root.
+- Every inventory, waste, alert, subscription, and payment row carries a tenant/store key.
+- `tenant_memberships` is the authoritative source for a user's tenant-specific role and status.
+- JWTs contain only identity metadata (`sub`, `iss`, `aud`, `jti`, timestamps). Role and tenant
+  are resolved from the database for every authenticated request.
+- `x-store-id` may select only an active membership owned by the authenticated user.
+- `SYSTEM_ADMIN` cannot impersonate a tenant through `x-store-id`.
+- Composite foreign keys added by Flyway prevent cross-tenant ingredient, batch, transaction,
+  waste, alert, daily-action, and payment references at the database layer.
+
+Roles are `SYSTEM_ADMIN`, `OWNER`, `MANAGER`, and `STAFF`. Method-level authorization is enabled;
+tenant-bound path parameters are additionally checked against the resolved tenant context.
+
+## Authentication
+
+- Access token TTL: 15 minutes.
+- Refresh token TTL: 14 days.
+- Refresh tokens are opaque, SHA-256 indexed in Redis, rotated atomically, and organized into
+  token families. Reuse revokes the whole family.
+- The refresh token is sent only as an `HttpOnly`, `Secure`, scoped cookie. It is not returned to
+  browser JavaScript or persisted in local storage.
+- Refresh/logout cookie requests require a trusted `Origin`; credentialed CORS accepts only
+  explicit origins.
+- Logout revokes the refresh session and deny-lists the current access-token `jti` until expiry.
+- Login, registration, refresh, and invitation endpoints have Redis-backed rate limiting with a
+  bounded in-process fallback.
+- Registration creates a pending owner and sends a one-time activation link; no authenticated
+  session is issued before activation.
+
+Required production values include `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`,
+`FRONTEND_LOGIN_URL`, and `FRONTEND_INVITE_URL`. Use a unique high-entropy JWT secret of at least
+32 bytes. See `../.env.backend.example` for the complete list.
+
+## Invitation email
+
+Staff and owner invitations use 256-bit random tokens. Only a SHA-256 token digest is retained in
+`invite_tokens`; links put the raw token in the URL fragment so it is not sent in HTTP referrers or
+server access logs. Acceptance locks the token row and consumes it once.
+
+Email delivery uses a transactional outbox with leased, bounded retries. The raw invitation URL is
+cleared after successful delivery, terminal failure, expiry, revocation, or activation. Email
+headers and HTML are sanitized. Production fails at startup when invitation delivery is disabled
+or Gmail SMTP credentials are missing/placeholders.
+
+Configure Gmail with an app password:
+
+```text
+INVITATION_EMAIL_ENABLED=true
+MAIL_USERNAME=service-account@gmail.com
+MAIL_APP_PASSWORD=<gmail-app-password>
+```
+
+## Inventory integrity and scale
+
+- Stock-out locks candidate batches before checking availability and allocates FEFO in stable
+  `expiry_date`, `received_at`, `id` order.
+- Expired stock is excluded from consumption and forecasting; waste recording can consume it.
+- Database checks prevent negative batch stock, negative costs, invalid transaction quantities,
+  and invalid transaction reason/type combinations.
+- Ingredient imports enforce subscription limits under a subscription-row lock and cap file size,
+  rows, columns, cell length, ZIP expansion, and reported errors. XLSX parsing disables DTD and
+  external entities.
+- Forecasts, insights, reports, inventory summaries, alerts, and admin KPIs use bounded pagination
+  or aggregate/set-based queries instead of loading complete tenant tables.
+- Report CSV exports use bounded date ranges, keyset/chunked reads, and spreadsheet-formula escaping.
+
+## Subscription and payOS
+
+Plan limits come from the active tenant subscription. Checkout requires an `Idempotency-Key` and
+serializes creation per tenant. Provider calls happen outside database transactions. Ambiguous
+creation is reconciled with the same deterministic payOS order code; late success for a closed
+local payment is moved to `REVIEW_REQUIRED` instead of silently activating a plan.
+
+Only a verified server-to-server payOS webhook can activate a paid subscription. Signature,
+provider order code, amount, currency, local payment state, and current pending subscription are
+validated. Return/cancel URLs only control browser navigation.
+
+```text
+PAYOS_ENABLED=true
+PAYOS_CLIENT_ID=<client-id>
+PAYOS_API_KEY=<api-key>
+PAYOS_CHECKSUM_KEY=<checksum-key>
+PAYOS_RETURN_URL=https://app.example.com/billing?payment=success
+PAYOS_CANCEL_URL=https://app.example.com/billing?payment=failed
+```
+
+Webhook URL:
+
+```text
+https://api.example.com/api/webhook/payment/payos
+```
+
+## Flyway
+
+Flyway migrations currently run from `V1` through `V15`. Apply them to a MySQL 8 staging clone
+before production deployment because `V8`-`V15` add data repairs, checks, generated columns,
+unique constraints, composite foreign keys, query indexes, tenant-scoped invitation tokens,
+and active ingredient-code uniqueness.
+
+`V2` historically inserted demo data; `V6` removes those users and all dependent demo records.
+There are no supported default or demo credentials. Create the first real owner through the
+verified registration flow and provision `SYSTEM_ADMIN` through an audited operational process.

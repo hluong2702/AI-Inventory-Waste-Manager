@@ -2,11 +2,14 @@ package vn.inventoryai.staff;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.inventoryai.auth.AppUser;
+import vn.inventoryai.auth.TenantMembership;
+import vn.inventoryai.auth.TenantMembershipRepository;
 import vn.inventoryai.auth.UserRepository;
 import vn.inventoryai.billing.PlanEntitlementService;
 import vn.inventoryai.common.enums.Role;
@@ -22,9 +25,8 @@ import vn.inventoryai.staff.dto.InvitationStatus;
 import vn.inventoryai.staff.dto.InvitationVerificationResponse;
 import vn.inventoryai.staff.dto.StaffResponse;
 import vn.inventoryai.store.Store;
-import vn.inventoryai.store.StoreRepository;
-import vn.inventoryai.store.Subscription;
-import vn.inventoryai.store.SubscriptionRepository;
+import vn.inventoryai.subscription.TenantSubscription;
+import vn.inventoryai.subscription.TenantSubscriptionRepository;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -34,19 +36,21 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
 public class StaffInvitationService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final List<Role> SEAT_ROLES = List.of(Role.MANAGER, Role.STAFF);
 
     private final StoreAccessService storeAccessService;
-    private final StoreRepository storeRepository;
-    private final SubscriptionRepository subscriptionRepository;
     private final UserRepository userRepository;
+    private final TenantMembershipRepository tenantMembershipRepository;
+    private final TenantSubscriptionRepository tenantSubscriptionRepository;
     private final InviteTokenRepository inviteTokenRepository;
     private final PasswordEncoder passwordEncoder;
-    private final EmailService emailService;
+    private final InvitationEmailOutboxService emailOutboxService;
     private final PlanEntitlementService planEntitlementService;
     private final StaffInviteRateLimiter staffInviteRateLimiter;
 
@@ -56,7 +60,10 @@ public class StaffInvitationService {
     @Transactional(readOnly = true)
     public List<StaffResponse> listStaff(Long storeId) {
         storeAccessService.assertCurrentStore(storeId);
-        return userRepository.findByStoreIdAndRoleIn(storeId, List.of(Role.MANAGER, Role.STAFF))
+        return tenantMembershipRepository.findAllByStoreIdAndRoleInOrderByUserFullNameAsc(
+                        storeId,
+                        SEAT_ROLES
+                )
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -74,45 +81,57 @@ public class StaffInvitationService {
         if (principal.role() == Role.MANAGER && invitedRole == Role.MANAGER) {
             throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Manager cannot invite another manager");
         }
-        staffInviteRateLimiter.check(principal.userId(), storeId);
 
-        String email = request.email().trim().toLowerCase();
-        if (userRepository.existsByEmail(email)) {
-            throw new AppException(ErrorCode.EMAIL_ALREADY_EXISTS, HttpStatus.CONFLICT, "Email này đã tồn tại hoặc đã được mời.");
-        }
+        TenantSubscription subscription = lockSubscriptionAndAssertSeatAvailable(storeId);
+        String email = normalizeEmail(request.email());
+        staffInviteRateLimiter.check(principal.userId(), storeId, email);
 
-        Subscription subscription = subscriptionRepository.findByStoreId(storeId)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Subscription not found"));
-        Integer maxStaff = planEntitlementService.limits(subscription.getPlan()).staff();
-        if (invitedRole == Role.STAFF && maxStaff != null) {
-            long currentStaff = userRepository.countByStoreIdAndRoleAndStatusNot(storeId, Role.STAFF, UserStatus.DISABLED);
-            if (currentStaff >= maxStaff) {
-                throw new AppException(ErrorCode.PLAN_LIMIT_EXCEEDED, HttpStatus.CONFLICT, "Staff limit exceeded for current plan");
-            }
-        }
-
-        Store store = storeRepository.findById(storeId)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Store not found"));
+        Store store = subscription.getTenant();
         String rawToken = randomToken();
 
-        AppUser user = new AppUser();
-        user.setStore(store);
-        user.setFullName(email.substring(0, email.indexOf('@')));
-        user.setEmail(email);
-        user.setPasswordHash(passwordEncoder.encode(randomToken()));
-        user.setRole(invitedRole);
-        user.setStatus(UserStatus.PENDING_ACTIVATION);
-        user.setMustChangePassword(false);
-        user = userRepository.save(user);
+        AppUser user = userRepository.findByEmail(email).orElse(null);
+        if (user != null && user.getStatus() == UserStatus.DISABLED) {
+            throw new AppException(
+                    ErrorCode.USER_DISABLED,
+                    HttpStatus.CONFLICT,
+                    "Tài khoản này đã bị vô hiệu hóa ở cấp hệ thống"
+            );
+        }
+        if (user != null && tenantMembershipRepository.findByUserIdAndStoreId(user.getId(), storeId).isPresent()) {
+            throw new AppException(
+                    ErrorCode.EMAIL_ALREADY_EXISTS,
+                    HttpStatus.CONFLICT,
+                    "Email này đã là thành viên hoặc đang có lời mời tại cửa hàng"
+            );
+        }
+        if (user == null) {
+            user = createPendingIdentity(store, email, invitedRole);
+        }
+
+        TenantMembership membership = new TenantMembership();
+        membership.setStore(store);
+        membership.setUser(user);
+        membership.setRole(invitedRole);
+        membership.setStatus(UserStatus.PENDING_ACTIVATION);
+        try {
+            membership = tenantMembershipRepository.saveAndFlush(membership);
+        } catch (DataIntegrityViolationException ex) {
+            throw new AppException(
+                    ErrorCode.EMAIL_ALREADY_EXISTS,
+                    HttpStatus.CONFLICT,
+                    "Email này đã là thành viên hoặc đang có lời mời tại cửa hàng"
+            );
+        }
 
         InviteToken inviteToken = new InviteToken();
         inviteToken.setUser(user);
+        inviteToken.setMembership(membership);
         inviteToken.setTokenHash(hashToken(rawToken));
         inviteToken.setExpiresAt(Instant.now().plusSeconds(48 * 60 * 60));
         inviteToken.setUsed(false);
-        inviteTokenRepository.save(inviteToken);
+        inviteToken = inviteTokenRepository.save(inviteToken);
 
-        emailService.sendStaffInvitationEmail(email, store.getName(), inviteUrl + "?token=" + rawToken);
+        emailOutboxService.enqueue(inviteToken, email, store.getName(), inviteUrl + "#token=" + rawToken);
         return listStaff(storeId);
     }
 
@@ -125,7 +144,7 @@ public class StaffInvitationService {
 
     @Transactional
     public InvitationVerificationResponse acceptInvitation(AcceptInvitationRequest request) {
-        InviteToken inviteToken = inviteTokenRepository.findByTokenHash(hashToken(request.token()))
+        InviteToken inviteToken = inviteTokenRepository.findByTokenHashForUpdate(hashToken(request.token()))
                 .orElseThrow(() -> invalidToken("Invitation token is invalid"));
 
         InvitationVerificationResponse verification = verificationResponse(inviteToken);
@@ -134,30 +153,45 @@ public class StaffInvitationService {
         }
 
         AppUser user = inviteToken.getUser();
-        user.setFullName(request.fullName().trim());
-        user.setPasswordHash(passwordEncoder.encode(request.password()));
-        user.setStatus(UserStatus.ACTIVE);
-        user.setMustChangePassword(false);
+        TenantMembership membership = inviteToken.getMembership();
+        if (user.getStatus() == UserStatus.DISABLED
+                || membership.getStatus() != UserStatus.PENDING_ACTIVATION) {
+            throw invalidToken("Invitation token is invalid");
+        }
+        boolean accountSetupRequired = user.getStatus() == UserStatus.PENDING_ACTIVATION;
+        if (accountSetupRequired) {
+            assertAccountSetupInput(request);
+            user.setFullName(request.fullName().trim());
+            user.setPasswordHash(passwordEncoder.encode(request.password()));
+            user.setStatus(UserStatus.ACTIVE);
+            user.setMustChangePassword(false);
+            userRepository.save(user);
+        }
+        membership.setStatus(UserStatus.ACTIVE);
+        membership.setUpdatedAt(Instant.now());
         inviteToken.setUsed(true);
         inviteTokenRepository.save(inviteToken);
-        userRepository.save(user);
+        tenantMembershipRepository.save(membership);
 
-        return new InvitationVerificationResponse(InvitationStatus.VALID, true, user.getEmail(), user.getStore().getName(), user.getRole());
+        return validResponse(inviteToken, accountSetupRequired);
     }
 
     @Transactional
     public List<StaffResponse> revokeInvitation(Long storeId, Long userId) {
         storeAccessService.assertCurrentStore(storeId);
-        AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "User not found"));
-        if (user.getStore() == null || !user.getStore().getId().equals(storeId)) {
-            throw new AppException(ErrorCode.STORE_MISMATCH, HttpStatus.FORBIDDEN, "User does not belong to current store");
-        }
-        if (user.getStatus() != UserStatus.PENDING_ACTIVATION) {
+        UserPrincipal principal = SecurityUtils.principal();
+        TenantMembership membership = lockedMembership(userId, storeId);
+        assertManageableTarget(principal, membership);
+        if (membership.getStatus() != UserStatus.PENDING_ACTIVATION) {
             throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Only pending invitation can be revoked");
         }
-        inviteTokenRepository.deleteByUserId(user.getId());
-        userRepository.delete(user);
+        AppUser user = membership.getUser();
+        inviteTokenRepository.deleteByMembershipId(membership.getId());
+        tenantMembershipRepository.delete(membership);
+        if (user.getStatus() == UserStatus.PENDING_ACTIVATION
+                && tenantMembershipRepository.countByUserId(user.getId()) == 0) {
+            userRepository.delete(user);
+        }
         return listStaff(storeId);
     }
 
@@ -165,19 +199,18 @@ public class StaffInvitationService {
     public List<StaffResponse> disableStaff(Long storeId, Long userId) {
         storeAccessService.assertCurrentStore(storeId);
         UserPrincipal principal = SecurityUtils.principal();
-        AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "User not found"));
-        if (user.getStore() == null || !user.getStore().getId().equals(storeId)) {
-            throw new AppException(ErrorCode.STORE_MISMATCH, HttpStatus.FORBIDDEN, "User does not belong to current store");
+        TenantMembership membership = lockedMembership(userId, storeId);
+        assertManageableTarget(principal, membership);
+        if (membership.getStatus() == UserStatus.PENDING_ACTIVATION) {
+            throw new AppException(
+                    ErrorCode.VALIDATION_ERROR,
+                    HttpStatus.CONFLICT,
+                    "Hãy thu hồi lời mời đang chờ thay vì vô hiệu hóa thành viên"
+            );
         }
-        if (user.getRole() == Role.MANAGER && principal.role() != Role.OWNER) {
-            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Only owner can disable manager");
-        }
-        if (user.getRole() == Role.OWNER || user.getRole() == Role.SYSTEM_ADMIN) {
-            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Cannot disable this role from staff API");
-        }
-        user.setStatus(UserStatus.DISABLED);
-        userRepository.save(user);
+        membership.setStatus(UserStatus.DISABLED);
+        membership.setUpdatedAt(Instant.now());
+        tenantMembershipRepository.save(membership);
         return listStaff(storeId);
     }
 
@@ -185,34 +218,20 @@ public class StaffInvitationService {
     public List<StaffResponse> enableStaff(Long storeId, Long userId) {
         storeAccessService.assertCurrentStore(storeId);
         UserPrincipal principal = SecurityUtils.principal();
-        AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "User not found"));
-        if (user.getStore() == null || !user.getStore().getId().equals(storeId)) {
-            throw new AppException(ErrorCode.STORE_MISMATCH, HttpStatus.FORBIDDEN, "User does not belong to current store");
-        }
-        if (user.getRole() == Role.MANAGER && principal.role() != Role.OWNER) {
-            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Only owner can enable manager");
-        }
-        if (user.getRole() == Role.OWNER || user.getRole() == Role.SYSTEM_ADMIN) {
-            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Cannot enable this role from staff API");
-        }
-        if (user.getStatus() != UserStatus.DISABLED) {
+        TenantMembership membership = lockedMembership(userId, storeId);
+        assertManageableTarget(principal, membership);
+        if (membership.getStatus() != UserStatus.DISABLED) {
             throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "Only disabled user can be enabled");
         }
-        if (user.getRole() == Role.STAFF) {
-            Subscription subscription = subscriptionRepository.findByStoreId(storeId)
-                    .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Subscription not found"));
-            Integer maxStaff = planEntitlementService.limits(subscription.getPlan()).staff();
-            if (maxStaff != null) {
-                long currentStaff = userRepository.countByStoreIdAndRoleAndStatusNot(storeId, Role.STAFF, UserStatus.DISABLED);
-                if (currentStaff >= maxStaff) {
-                    throw new AppException(ErrorCode.PLAN_LIMIT_EXCEEDED, HttpStatus.CONFLICT, "Staff limit exceeded for current plan");
-                }
-            }
+        if (membership.getUser().getStatus() != UserStatus.ACTIVE) {
+            throw new AppException(ErrorCode.USER_DISABLED, HttpStatus.CONFLICT,
+                    "Tài khoản chưa được kích hoạt hoặc đã bị vô hiệu hóa ở cấp hệ thống");
         }
+        lockSubscriptionAndAssertSeatAvailable(storeId);
 
-        user.setStatus(UserStatus.ACTIVE);
-        userRepository.save(user);
+        membership.setStatus(UserStatus.ACTIVE);
+        membership.setUpdatedAt(Instant.now());
+        tenantMembershipRepository.save(membership);
         return listStaff(storeId);
     }
 
@@ -224,7 +243,94 @@ public class StaffInvitationService {
             return InvitationVerificationResponse.invalid(InvitationStatus.EXPIRED);
         }
         AppUser user = inviteToken.getUser();
-        return new InvitationVerificationResponse(InvitationStatus.VALID, true, user.getEmail(), user.getStore().getName(), user.getRole());
+        TenantMembership membership = inviteToken.getMembership();
+        if (user.getStatus() == UserStatus.DISABLED
+                || membership.getStatus() != UserStatus.PENDING_ACTIVATION) {
+            return InvitationVerificationResponse.invalid(InvitationStatus.INVALID);
+        }
+        return validResponse(inviteToken, user.getStatus() == UserStatus.PENDING_ACTIVATION);
+    }
+
+    private TenantSubscription lockSubscriptionAndAssertSeatAvailable(Long storeId) {
+        TenantSubscription subscription = tenantSubscriptionRepository.findActiveForUpdate(storeId)
+                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Subscription not found"));
+        Integer maxSeats = planEntitlementService.limits(subscription.getPlan().getCode()).staff();
+        if (maxSeats == null) {
+            return subscription;
+        }
+
+        long occupiedSeats = tenantMembershipRepository.countByStoreIdAndRoleInAndStatusNot(
+                storeId,
+                SEAT_ROLES,
+                UserStatus.DISABLED
+        );
+        if (occupiedSeats >= maxSeats) {
+            throw new AppException(ErrorCode.PLAN_LIMIT_EXCEEDED, HttpStatus.CONFLICT,
+                    "Staff seat limit exceeded for current plan");
+        }
+        return subscription;
+    }
+
+    private void assertManageableTarget(UserPrincipal principal, TenantMembership membership) {
+        if (membership.getRole() == Role.OWNER || membership.getRole() == Role.SYSTEM_ADMIN) {
+            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                    "Cannot manage this role from staff API");
+        }
+        if (membership.getRole() == Role.MANAGER && principal.role() != Role.OWNER) {
+            throw new AppException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                    "Only owner can manage a manager");
+        }
+    }
+
+    private TenantMembership lockedMembership(Long userId, Long storeId) {
+        return tenantMembershipRepository.findByUserIdAndStoreIdForUpdate(userId, storeId)
+                .orElseThrow(() -> new AppException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND,
+                        "Tenant membership not found"));
+    }
+
+    private AppUser createPendingIdentity(Store store, String email, Role invitedRole) {
+        AppUser user = new AppUser();
+        user.setStore(store);
+        user.setFullName(email.substring(0, email.indexOf('@')));
+        user.setEmail(email);
+        user.setPasswordHash(passwordEncoder.encode(randomToken()));
+        user.setRole(invitedRole);
+        user.setStatus(UserStatus.PENDING_ACTIVATION);
+        user.setMustChangePassword(false);
+        try {
+            return userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException ex) {
+            throw new AppException(
+                    ErrorCode.EMAIL_ALREADY_EXISTS,
+                    HttpStatus.CONFLICT,
+                    "Email vừa được tạo ở một cửa hàng khác; vui lòng thử gửi lời mời lại"
+            );
+        }
+    }
+
+    private void assertAccountSetupInput(AcceptInvitationRequest request) {
+        String fullName = request.fullName();
+        String password = request.password();
+        if (fullName == null || fullName.isBlank() || fullName.trim().length() < 2
+                || password == null || password.length() < 8 || password.length() > 128) {
+            throw new AppException(
+                    ErrorCode.VALIDATION_ERROR,
+                    HttpStatus.BAD_REQUEST,
+                    "Họ tên và mật khẩu từ 8 đến 128 ký tự là bắt buộc khi tạo tài khoản mới"
+            );
+        }
+    }
+
+    private InvitationVerificationResponse validResponse(InviteToken inviteToken, boolean accountSetupRequired) {
+        TenantMembership membership = inviteToken.getMembership();
+        return new InvitationVerificationResponse(
+                InvitationStatus.VALID,
+                true,
+                inviteToken.getUser().getEmail(),
+                membership.getStore().getName(),
+                membership.getRole(),
+                accountSetupRequired
+        );
     }
 
     private AppException invalidToken(String message) {
@@ -245,6 +351,18 @@ public class StaffInvitationService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    private String normalizeEmail(String value) {
+        if (value == null) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR, HttpStatus.BAD_REQUEST, "Email is required");
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        int atIndex = normalized.indexOf('@');
+        if (atIndex <= 0 || atIndex == normalized.length() - 1 || normalized.length() > 180) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR, HttpStatus.BAD_REQUEST, "Email is invalid");
+        }
+        return normalized;
+    }
+
     private String hashToken(String token) {
         if (token == null || token.isBlank()) {
             throw invalidToken("Invitation token is required");
@@ -257,7 +375,15 @@ public class StaffInvitationService {
         }
     }
 
-    private StaffResponse toResponse(AppUser user) {
-        return new StaffResponse(user.getId(), user.getFullName(), user.getEmail(), user.getRole(), user.getStatus(), user.isMustChangePassword());
+    private StaffResponse toResponse(TenantMembership membership) {
+        AppUser user = membership.getUser();
+        return new StaffResponse(
+                user.getId(),
+                user.getFullName(),
+                user.getEmail(),
+                membership.getRole(),
+                membership.getStatus(),
+                user.isMustChangePassword()
+        );
     }
 }

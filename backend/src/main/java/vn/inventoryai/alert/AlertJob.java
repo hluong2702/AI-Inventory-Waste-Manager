@@ -1,65 +1,84 @@
 package vn.inventoryai.alert;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
-import vn.inventoryai.common.enums.AlertType;
 import vn.inventoryai.common.enums.StoreStatus;
-import vn.inventoryai.inventory.Ingredient;
-import vn.inventoryai.inventory.IngredientRepository;
-import vn.inventoryai.inventory.InventoryBatch;
-import vn.inventoryai.inventory.InventoryBatchRepository;
-import vn.inventoryai.store.Store;
+import vn.inventoryai.common.observability.OperationalMetrics;
 import vn.inventoryai.store.StoreRepository;
 
-import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class AlertJob {
     private final StoreRepository storeRepository;
-    private final IngredientRepository ingredientRepository;
-    private final InventoryBatchRepository batchRepository;
-    private final AlertRepository alertRepository;
+    private final AlertGenerationService alertGenerationService;
+    private final Clock clock;
+    private final OperationalMetrics operationalMetrics;
 
     @Value("${app.alerts.expiring-days:3}")
     private long expiringDays;
 
-    @Scheduled(cron = "0 15 2 * * *")
-    @Transactional
+    @Value("${app.alerts.store-page-size:100}")
+    private int configuredStorePageSize;
+
+    @Value("${app.alerts.zone:Asia/Ho_Chi_Minh}")
+    private String alertZone;
+
+    @Scheduled(
+            cron = "${app.alerts.cron:0 15 2 * * *}",
+            zone = "${app.alerts.zone:Asia/Ho_Chi_Minh}"
+    )
     public void generateDailyAlerts() {
-        storeRepository.findAll().stream()
-                .filter(store -> store.getStatus() == StoreStatus.ACTIVE)
-                .forEach(this::generateForStore);
-    }
+        LocalDate businessDate = LocalDate.now(clock.withZone(ZoneId.of(alertZone)));
+        long safeExpiringDays = Math.max(0, Math.min(expiringDays, 365));
+        LocalDate expiryThreshold = businessDate.plusDays(safeExpiringDays);
+        int pageSize = Math.max(1, Math.min(configuredStorePageSize, 500));
+        long afterStoreId = 0L;
+        int processedStores = 0;
+        int failedStores = 0;
 
-    private void generateForStore(Store store) {
-        Long storeId = store.getId();
-        LocalDate threshold = LocalDate.now().plusDays(expiringDays);
-        for (InventoryBatch batch : batchRepository.findByStoreIdAndQuantityGreaterThanAndExpiryDateLessThanEqual(storeId, BigDecimal.ZERO, threshold)) {
-            createIfAbsent(store, batch.getIngredient(), AlertType.EXPIRING_SOON);
-        }
+        while (true) {
+            List<Long> storeIds = storeRepository.findIdsByStatusAfter(
+                    StoreStatus.ACTIVE,
+                    afterStoreId,
+                    PageRequest.of(0, pageSize)
+            );
+            if (storeIds.isEmpty()) {
+                break;
+            }
 
-        for (Ingredient ingredient : ingredientRepository.findByStoreIdAndDeletedFalse(storeId)) {
-            BigDecimal currentStock = ingredientRepository.currentStock(storeId, ingredient.getId());
-            if (currentStock.compareTo(ingredient.getMinStock()) < 0) {
-                createIfAbsent(store, ingredient, AlertType.LOW_STOCK);
+            for (Long storeId : storeIds) {
+                try {
+                    alertGenerationService.generateForStore(storeId, businessDate, expiryThreshold);
+                    operationalMetrics.alertGeneration("success");
+                    processedStores++;
+                } catch (RuntimeException failure) {
+                    operationalMetrics.alertGeneration("failure");
+                    failedStores++;
+                    log.error("Alert generation failed for storeId={}", storeId, failure);
+                }
+                afterStoreId = storeId;
+            }
+
+            if (storeIds.size() < pageSize) {
+                break;
             }
         }
-    }
 
-    private void createIfAbsent(Store store, Ingredient ingredient, AlertType type) {
-        if (alertRepository.existsByStoreIdAndIngredientIdAndTypeAndResolvedFalse(store.getId(), ingredient.getId(), type)) {
-            return;
-        }
-        Alert alert = new Alert();
-        alert.setStore(store);
-        alert.setIngredient(ingredient);
-        alert.setType(type);
-        alert.setResolved(false);
-        alertRepository.save(alert);
+        log.info(
+                "Daily alert generation completed: processedStores={}, failedStores={}, businessDate={}",
+                processedStores,
+                failedStores,
+                businessDate
+        );
     }
 }

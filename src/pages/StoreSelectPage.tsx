@@ -94,11 +94,11 @@ export default function StoreSelectPage() {
                   <div className="space-y-1.5 text-[10px] text-ink/60">
                     <div className="flex items-center gap-1.5">
                       <MapPin size={10} className="shrink-0" />
-                      <span className="truncate">{store.address}</span>
+                      <span className="truncate">{store.address ?? 'Chưa cập nhật'}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Phone size={10} className="shrink-0" />
-                      <span>{store.phone}</span>
+                      <span>{store.phone ?? 'Chưa cập nhật'}</span>
                     </div>
                   </div>
 

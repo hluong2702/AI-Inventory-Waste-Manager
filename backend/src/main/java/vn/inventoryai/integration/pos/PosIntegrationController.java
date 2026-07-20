@@ -12,20 +12,35 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PosIntegrationController {
     private final List<PosSalesImportService> importServices;
+    private final PosDeductionService posDeductionService;
 
-    @PostMapping("/csv/import")
+    @PostMapping("/csv/preview")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    PosSalesImportResult importCsv(@RequestParam("file") MultipartFile file) {
+    PosSalesImportResult previewCsv(@RequestParam("file") MultipartFile file) {
         return importServices.stream()
                 .filter(service -> "CSV".equals(service.provider()))
                 .findFirst()
                 .orElseThrow()
-                .importSales(file);
+                .previewSales(file);
+    }
+
+    @PostMapping("/csv/deduct")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    PosSalesImportResult deductCsv(@RequestParam("file") MultipartFile file) {
+        return posDeductionService.deductSales(file);
     }
 
     @GetMapping("/providers")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    List<String> providers() {
-        return List.of("CSV", "KIOTVIET_READY", "SAPO_READY", "CUKCUK_READY");
+    List<ProviderCapability> providers() {
+        return List.of(
+                new ProviderCapability("CSV", "ACTIVE", true, "Nhập file CSV doanh số bán hàng để tự động trừ tồn kho theo công thức."),
+                new ProviderCapability("KIOTVIET", "NOT_AVAILABLE", false, "Chưa có kết nối dữ liệu được cấu hình."),
+                new ProviderCapability("SAPO", "NOT_AVAILABLE", false, "Chưa có kết nối dữ liệu được cấu hình."),
+                new ProviderCapability("CUKCUK", "NOT_AVAILABLE", false, "Chưa có kết nối dữ liệu được cấu hình.")
+        );
+    }
+
+    record ProviderCapability(String provider, String status, boolean persistsSales, String description) {
     }
 }

@@ -5,9 +5,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
 import vn.inventoryai.admin.dto.*;
 import vn.inventoryai.auth.UserRepository;
+import vn.inventoryai.auth.TenantMembership;
+import vn.inventoryai.auth.TenantMembershipRepository;
 import vn.inventoryai.common.enums.StoreStatus;
 import vn.inventoryai.common.enums.SubscriptionPlan;
 import vn.inventoryai.common.enums.UserStatus;
@@ -15,14 +19,17 @@ import vn.inventoryai.common.error.AppException;
 import vn.inventoryai.common.error.ErrorCode;
 import vn.inventoryai.inventory.StockTransactionRepository;
 import vn.inventoryai.inventory.IngredientRepository;
+import vn.inventoryai.inventory.WasteRecordRepository;
 import vn.inventoryai.store.Store;
 import vn.inventoryai.store.StoreRepository;
-import vn.inventoryai.store.SubscriptionRepository;
+import vn.inventoryai.subscription.SubscriptionStatus;
+import vn.inventoryai.subscription.TenantSubscriptionRepository;
 
 import java.math.BigDecimal;
 import java.time.*;
-import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -31,32 +38,39 @@ import java.util.stream.Collectors;
 public class AdminService {
     private final StoreRepository storeRepository;
     private final UserRepository userRepository;
-    private final SubscriptionRepository subscriptionRepository;
+    private final TenantMembershipRepository membershipRepository;
+    private final TenantSubscriptionRepository subscriptionRepository;
     private final StockTransactionRepository transactionRepository;
     private final IngredientRepository ingredientRepository;
+    private final WasteRecordRepository wasteRecordRepository;
+    private final Clock clock;
 
     @Transactional(readOnly = true)
     public AdminDashboardResponse dashboard() {
-        LocalDate today = LocalDate.now();
-        BigDecimal mrr = subscriptionRepository.findAll().stream()
-                .filter(subscription -> subscription.isActive() && subscription.getPlan() != SubscriptionPlan.FREE)
-                .map(subscription -> subscription.getPlan() == SubscriptionPlan.BASIC ? BigDecimal.valueOf(299_000) : BigDecimal.valueOf(699_000))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        LocalDate today = LocalDate.now(clock);
+        BigDecimal mrr = subscriptionRepository.sumActiveMonthlyRecurringRevenue();
+        if (mrr == null) mrr = BigDecimal.ZERO;
 
-        Map<Long, Long> transactionCounts = transactionRepository.countGroupedByStoreId().stream()
-                .collect(Collectors.toMap(row -> (Long) row[0], row -> (Long) row[1]));
-        List<StoreActivityResponse> mostActive = storeRepository.findAll().stream()
-                .map(store -> new StoreActivityResponse(store.getId(), store.getName(), transactionCounts.getOrDefault(store.getId(), 0L)))
-                .sorted(Comparator.comparingLong(StoreActivityResponse::transactionCount).reversed())
-                .limit(10)
+        List<StoreActivityResponse> mostActive = transactionRepository
+                .findMostActiveStores(PageRequest.of(0, 10))
+                .stream()
+                .map(activity -> new StoreActivityResponse(
+                        activity.getStoreId(),
+                        activity.getStoreName(),
+                        activity.getTransactionCount() == null ? 0 : activity.getTransactionCount()
+                ))
                 .toList();
 
         return new AdminDashboardResponse(
                 storeRepository.count(),
                 userRepository.countByStatus(UserStatus.ACTIVE),
                 mrr,
-                subscriptionRepository.countByActiveTrueAndExpiresAtBetween(today, today.plusDays(7)),
-                storeRepository.countByCreatedAtAfter(today.atStartOfDay(ZoneId.systemDefault()).toInstant()),
+                subscriptionRepository.countByStatusAndEndDateBetween(
+                        SubscriptionStatus.ACTIVE,
+                        today,
+                        today.plusDays(7)
+                ),
+                storeRepository.countByCreatedAtAfter(today.atStartOfDay(clock.getZone()).toInstant()),
                 mostActive
         );
     }
@@ -68,35 +82,59 @@ public class AdminService {
                 userRepository.count(),
                 ingredientRepository.count(),
                 transactionRepository.count(),
-                BigDecimal.ZERO
+                zero(wasteRecordRepository.sumEstimatedCostAllStores())
         );
     }
 
     @Transactional(readOnly = true)
     public Page<AdminUserResponse> users(Pageable pageable) {
-        return userRepository.findAll(pageable)
-                .map(user -> new AdminUserResponse(
+        var users = userRepository.findAllWithStore(boundedPageable(
+                        pageable,
+                        Set.of("id", "email", "fullName", "role", "status", "createdAt"),
+                        Sort.by(Sort.Order.desc("id"))
+                ));
+        Map<Long, List<TenantMembership>> membershipsByUser = users.isEmpty()
+                ? Map.of()
+                : membershipRepository.findAllByUserIdInOrderByStoreNameAsc(
+                                users.getContent().stream().map(user -> user.getId()).toList()
+                        )
+                        .stream()
+                        .collect(Collectors.groupingBy(membership -> membership.getUser().getId()));
+        return users.map(user -> new AdminUserResponse(
                         user.getId(),
                         user.getStore() == null ? null : user.getStore().getId(),
                         user.getEmail(),
                         user.getEmail(),
                         user.getFullName(),
                         user.getRole(),
-                        user.getStatus()
+                        user.getStatus(),
+                        membershipsByUser.getOrDefault(user.getId(), List.of()).stream()
+                                .map(membership -> new AdminUserResponse.Membership(
+                                        membership.getStore().getId(),
+                                        membership.getStore().getName(),
+                                        membership.getRole(),
+                                        membership.getStatus()
+                                ))
+                                .toList()
                 ));
     }
 
     @Transactional(readOnly = true)
     public Page<AdminStoreResponse> stores(SubscriptionPlan plan, StoreStatus status, Pageable pageable) {
+        Pageable boundedPageable = boundedPageable(
+                pageable,
+                Set.of("id", "name", "subscriptionPlan", "status", "createdAt"),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))
+        );
         Page<Store> stores;
         if (plan != null && status != null) {
-            stores = storeRepository.findBySubscriptionPlanAndStatus(plan, status, pageable);
+            stores = storeRepository.findBySubscriptionPlanAndStatus(plan, status, boundedPageable);
         } else if (plan != null) {
-            stores = storeRepository.findBySubscriptionPlan(plan, pageable);
+            stores = storeRepository.findBySubscriptionPlan(plan, boundedPageable);
         } else if (status != null) {
-            stores = storeRepository.findByStatus(status, pageable);
+            stores = storeRepository.findByStatus(status, boundedPageable);
         } else {
-            stores = storeRepository.findAll(pageable);
+            stores = storeRepository.findAll(boundedPageable);
         }
         return stores.map(this::toResponse);
     }
@@ -110,6 +148,40 @@ public class AdminService {
     }
 
     private AdminStoreResponse toResponse(Store store) {
-        return new AdminStoreResponse(store.getId(), store.getName(), store.getSubscriptionPlan(), store.getStatus(), store.getCreatedAt());
+        return new AdminStoreResponse(
+                store.getId(),
+                store.getName(),
+                store.getAddress(),
+                store.getPhone(),
+                store.getSubscriptionPlan(),
+                store.getStatus(),
+                store.getCreatedAt()
+        );
+    }
+
+    private Pageable boundedPageable(
+            Pageable requested,
+            Set<String> allowedSorts,
+            Sort defaultSort
+    ) {
+        int page = requested == null || requested.isUnpaged() ? 0 : Math.max(requested.getPageNumber(), 0);
+        int size = requested == null || requested.isUnpaged()
+                ? 20
+                : Math.min(Math.max(requested.getPageSize(), 1), 100);
+        List<Sort.Order> orders = new ArrayList<>();
+        if (requested != null) {
+            requested.getSort().forEach(order -> {
+                if (allowedSorts.contains(order.getProperty())) orders.add(order);
+            });
+        }
+        if (orders.isEmpty()) defaultSort.forEach(orders::add);
+        if (orders.stream().noneMatch(order -> order.getProperty().equals("id"))) {
+            orders.add(Sort.Order.desc("id"));
+        }
+        return PageRequest.of(page, size, Sort.by(orders));
+    }
+
+    private BigDecimal zero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 }

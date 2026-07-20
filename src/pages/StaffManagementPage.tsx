@@ -29,6 +29,7 @@ const statusClass: Record<UserStatus, string> = {
 
 export default function StaffManagementPage() {
   const currentStore = useAuthStore((state) => state.currentStore)
+  const currentRole = useAuthStore((state) => state.role)
   const staffLimit = useSubscriptionStore((state) => state.current.limits.staff)
   const [staff, setStaff] = useState<SessionUser[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -39,18 +40,18 @@ export default function StaffManagementPage() {
   const [disableCandidate, setDisableCandidate] = useState<SessionUser | null>(null)
   const [isDisabling, setIsDisabling] = useState(false)
 
-  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<InviteValues>({
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<InviteValues>({
     resolver: zodResolver(inviteSchema),
     defaultValues: { email: '', role: 'STAFF' },
   })
 
-  const watchedRole = watch('role')
-  const activeStaffCount = useMemo(
-    () => staff.filter((user) => user.role === 'STAFF' && user.status !== 'DISABLED').length,
+  const occupiedSeatCount = useMemo(
+    () => staff.filter(
+      (user) => (user.role === 'MANAGER' || user.role === 'STAFF') && user.status !== 'DISABLED',
+    ).length,
     [staff],
   )
-  // Kiểm tra giới hạn gói Free/Basic/Pro trước khi mở form mời Staff.
-  const staffLimitReached = watchedRole === 'STAFF' && typeof staffLimit === 'number' && activeStaffCount >= staffLimit
+  const staffLimitReached = typeof staffLimit === 'number' && occupiedSeatCount >= staffLimit
 
   const loadStaff = useCallback(async () => {
     if (!currentStore) return
@@ -72,8 +73,8 @@ export default function StaffManagementPage() {
 
   async function onInvite(values: InviteValues) {
     if (!currentStore) return
-    if (values.role === 'STAFF' && typeof staffLimit === 'number' && activeStaffCount >= staffLimit) {
-      setError(`Đã đạt giới hạn gói ${currentStore.subscriptionPlan}: tối đa ${staffLimit} Staff.`)
+    if (typeof staffLimit === 'number' && occupiedSeatCount >= staffLimit) {
+      setError(`Đã đạt giới hạn gói ${currentStore.subscriptionPlan}: tối đa ${staffLimit} nhân sự.`)
       return
     }
 
@@ -150,9 +151,9 @@ export default function StaffManagementPage() {
         </button>
       </div>
 
-      {typeof staffLimit === 'number' && activeStaffCount >= staffLimit && (
+      {typeof staffLimit === 'number' && occupiedSeatCount >= staffLimit && (
         <div className="rounded-2xl border border-terracotta/20 bg-terracotta/10 p-4 text-sm font-semibold text-terracotta">
-          Đã đạt giới hạn gói {currentStore?.subscriptionPlan}: {activeStaffCount}/{staffLimit} Staff. Nâng cấp gói để mời thêm Staff.
+          Đã đạt giới hạn gói {currentStore?.subscriptionPlan}: {occupiedSeatCount}/{staffLimit} nhân sự. Nâng cấp gói để mời thêm.
         </div>
       )}
 
@@ -240,14 +241,14 @@ export default function StaffManagementPage() {
             <label className="mt-4 block">
               <span className="text-xs font-bold text-ink/75">Role</span>
               <select {...register('role')} className="mt-1.5 w-full rounded-xl border border-ink/10 bg-offwhite/50 px-3 py-3 text-sm outline-none">
-                <option value="MANAGER">Manager</option>
+                {currentRole === 'STORE_OWNER' && <option value="MANAGER">Manager</option>}
                 <option value="STAFF">Staff</option>
               </select>
             </label>
 
             {staffLimitReached && (
               <div className="mt-4 rounded-xl border border-terracotta/20 bg-terracotta/10 px-3 py-2 text-xs font-semibold text-terracotta">
-                Gói {currentStore?.subscriptionPlan} đã đạt giới hạn {staffLimit} Staff. Hãy chọn Manager hoặc nâng cấp gói.
+                Gói {currentStore?.subscriptionPlan} đã đạt giới hạn {staffLimit} nhân sự, bao gồm cả Manager và Staff.
               </div>
             )}
 

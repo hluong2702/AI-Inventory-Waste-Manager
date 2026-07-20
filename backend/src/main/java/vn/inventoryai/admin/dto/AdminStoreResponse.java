@@ -8,6 +8,8 @@ import java.time.Instant;
 public record AdminStoreResponse(
         Long id,
         String name,
+        String address,
+        String phone,
         SubscriptionPlan subscriptionPlan,
         StoreStatus status,
         Instant createdAt

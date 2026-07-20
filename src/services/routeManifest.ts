@@ -22,7 +22,14 @@ export const routeManifest: RouteManifestItem[] = [
   { path: '/forecast', area: 'app', label: 'Dự báo nhập hàng', roles: ['STORE_OWNER', 'MANAGER'] },
   { path: '/billing', area: 'app', label: 'Billing / Upgrade', roles: ['STORE_OWNER'] },
   { path: '/settings/staff', area: 'app', label: 'Quản lý nhân viên và lời mời', roles: ['STORE_OWNER', 'MANAGER'] },
+  { path: '/recipes', area: 'app', label: 'Quản lý công thức định lượng', roles: ['STORE_OWNER', 'MANAGER', 'STAFF'] },
+  { path: '/integrations/pos', area: 'app', label: 'Tích hợp bán hàng POS', roles: ['STORE_OWNER', 'MANAGER'] },
   { path: '/admin', area: 'admin', label: 'Admin Dashboard hệ thống', roles: ['SYSTEM_ADMIN'] },
   { path: '/admin/stores', area: 'admin', label: 'Quản trị toàn bộ Store/Tenant', roles: ['SYSTEM_ADMIN'] },
   { path: '/admin/users', area: 'admin', label: 'Quản trị toàn bộ User', roles: ['SYSTEM_ADMIN'] },
 ]
+
+export function rolesForRoute(path: string): Role[] {
+  const roles = routeManifest.find((route) => route.path === path)?.roles
+  return !roles || roles === 'guest' ? [] : roles
+}

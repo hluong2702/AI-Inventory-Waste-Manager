@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, WasteRecord, Ingredient, WasteDashboard, AuditLog, PageResponse } from '../types'
+import type { ApiResponse, WasteRecord, WasteDashboard, WasteReportSummary, AuditLog, PageResponse } from '../types'
 import Pagination from '../components/Pagination'
 import { useStore } from '../context/StoreContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
@@ -39,30 +39,31 @@ const COLORS = {
   OTHER: '#3A3A34'       // Ink (Dark)
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export default function ReportsPage() {
   const { activeStore } = useStore()
   
   // Lọc theo khoảng thời gian (Mặc định lấy 30 ngày qua)
   const today = new Date()
-  const defaultEndDate = today.toISOString().slice(0, 10)
-  const defaultStartDate = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const defaultEndDate = toDateInputValue(today)
+  const defaultStartDate = toDateInputValue(new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000))
   const [startDate, setStartDate] = useState(defaultStartDate)
   const [endDate, setEndDate] = useState(defaultEndDate)
   const [wastePage, setWastePage] = useState(0)
   const [auditPage, setAuditPage] = useState(0)
 
-  // 1. Tải danh sách nguyên liệu
-  const { data: ingResponse } = useQuery({
-    queryKey: ['ingredients'],
-    queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<Ingredient[]>>('/ingredients')
-      return res.data
-    }
-  })
-  const ingredients = ingResponse?.data ?? []
+  const reportRangeDays = startDate && endDate
+    ? Math.round((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86_400_000) + 1
+    : 0
+  const isDateRangeValid = Boolean(startDate && endDate && startDate <= endDate && reportRangeDays <= 366)
 
-  // 2. Tải danh sách báo cáo lãng phí theo khoảng thời gian
-  const { data: response, isLoading, isError } = useQuery({
+  const { data: response, isLoading: isLoadingWaste, isError: isWasteError } = useQuery({
     queryKey: ['reports-waste', activeStore?.id, startDate, endDate, wastePage],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<PageResponse<WasteRecord>>>(
@@ -70,9 +71,21 @@ export default function ReportsPage() {
       )
       return res.data
     },
-    enabled: !!activeStore?.id
+    enabled: !!activeStore?.id && isDateRangeValid
   })
   const wasteRecords = response?.data.content ?? []
+
+  const { data: summaryResponse, isLoading: isLoadingSummary, isError: isSummaryError } = useQuery({
+    queryKey: ['reports-waste-summary', activeStore?.id, startDate, endDate],
+    queryFn: async () => {
+      const res = await apiClient.get<ApiResponse<WasteReportSummary>>(
+        `/reports/waste/summary?startDate=${startDate}&endDate=${endDate}`
+      )
+      return res.data
+    },
+    enabled: !!activeStore?.id && isDateRangeValid
+  })
+  const wasteSummary = summaryResponse?.data
 
   const { data: dashboardResponse } = useQuery({
     queryKey: ['waste-dashboard', activeStore?.id],
@@ -84,44 +97,27 @@ export default function ReportsPage() {
   })
   const wasteDashboard = dashboardResponse?.data
 
-  const { data: auditResponse } = useQuery({
+  const { data: auditResponse, isLoading: isLoadingAudit, isError: isAuditError } = useQuery({
     queryKey: ['audit-log', activeStore?.id, startDate, endDate, auditPage],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<PageResponse<AuditLog>>>(`/reports/audit-log?startDate=${startDate}&endDate=${endDate}&page=${auditPage}&size=10&sort=createdAt,desc`)
       return res.data
     },
-    enabled: !!activeStore?.id
+    enabled: !!activeStore?.id && isDateRangeValid
   })
   const auditLogs = auditResponse?.data.content ?? []
 
-  // ==========================================
-  // XỬ LÝ SỐ LIỆU THỐNG KÊ LÃNG PHÍ
-  // ==========================================
-  
-  // Tính tổng chi phí lãng phí
-  const totalCost = wasteRecords.reduce((sum, w) => sum + w.estimatedCost, 0)
-  
-  // Tính tổng khối lượng hủy
-  const totalQty = wasteRecords.reduce((sum, w) => sum + w.quantity, 0)
-
-  // Nhóm lãng phí theo nguyên nhân cho biểu đồ Tròn (PieChart)
-  const groupedByReason = wasteRecords.reduce<Record<string, number>>((acc, w) => {
-    const label = reasonLabel[w.reason]
-    acc[label] = (acc[label] || 0) + w.estimatedCost
-    return acc
-  }, {})
-
-  const chartData = Object.entries(groupedByReason).map(([name, value]) => ({
-    name,
-    value,
-    color: name === 'Hết hạn sử dụng' 
-      ? COLORS.EXPIRED 
-      : name === 'Hư hỏng / Hao hụt' 
-      ? COLORS.DAMAGED 
-      : name === 'Lỗi chế biến bếp' 
-      ? COLORS.PREP_ERROR 
-      : COLORS.OTHER
-  }))
+  const isLoading = isLoadingWaste || isLoadingSummary || isLoadingAudit
+  const isError = isWasteError || isSummaryError || isAuditError
+  const totalCost = wasteSummary?.totalWasteCost ?? 0
+  const chartData = (wasteSummary?.reasonBreakdown ?? []).map((item) => {
+    const reason = item.reason as WasteRecord['reason']
+    return {
+      name: reasonLabel[reason] ?? item.reason,
+      value: item.estimatedCost,
+      color: COLORS[reason] ?? COLORS.OTHER
+    }
+  })
 
   async function downloadCsv(path: string, filename: string) {
     const res = await apiClient.get(path, { responseType: 'blob' })
@@ -134,11 +130,25 @@ export default function ReportsPage() {
   }
 
   function handleExportWaste() {
+    if (!isDateRangeValid) return
     downloadCsv(`/reports/waste/export?startDate=${startDate}&endDate=${endDate}`, `bao-cao-that-thoat-${startDate}-${endDate}.csv`)
   }
 
   function handleExportInventory() {
+    if (!isDateRangeValid) return
     downloadCsv(`/reports/inventory/export?startDate=${startDate}&endDate=${endDate}`, `giao-dich-ton-kho-${startDate}-${endDate}.csv`)
+  }
+
+  function updateStartDate(value: string) {
+    setStartDate(value)
+    setWastePage(0)
+    setAuditPage(0)
+  }
+
+  function updateEndDate(value: string) {
+    setEndDate(value)
+    setWastePage(0)
+    setAuditPage(0)
   }
 
   return (
@@ -155,14 +165,16 @@ export default function ReportsPage() {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={handleExportInventory}
-            className="flex items-center gap-1.5 border border-ink/15 hover:border-sage-dark/45 bg-white text-ink rounded-xl py-2 px-3.5 text-xs font-semibold hover:bg-ink/5 transition-colors shadow-sm"
+            disabled={!isDateRangeValid}
+            className="flex items-center gap-1.5 border border-ink/15 hover:border-sage-dark/45 bg-white text-ink rounded-xl py-2 px-3.5 text-xs font-semibold hover:bg-ink/5 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Download size={14} />
             <span>Export tồn kho</span>
           </button>
           <button
             onClick={handleExportWaste}
-            className="flex items-center gap-1.5 border border-ink/15 hover:border-sage-dark/45 bg-white text-ink rounded-xl py-2 px-3.5 text-xs font-semibold hover:bg-ink/5 transition-colors shadow-sm"
+            disabled={!isDateRangeValid}
+            className="flex items-center gap-1.5 border border-ink/15 hover:border-sage-dark/45 bg-white text-ink rounded-xl py-2 px-3.5 text-xs font-semibold hover:bg-ink/5 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Download size={14} />
             <span>Export thất thoát</span>
@@ -184,7 +196,8 @@ export default function ReportsPage() {
             <input
               type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              max={endDate || undefined}
+              onChange={(e) => updateStartDate(e.target.value)}
               className="bg-offwhite/50 border border-ink/10 rounded-xl pl-9 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sage focus:bg-white"
             />
           </div>
@@ -197,14 +210,20 @@ export default function ReportsPage() {
             <input
               type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              min={startDate || undefined}
+              onChange={(e) => updateEndDate(e.target.value)}
               className="bg-offwhite/50 border border-ink/10 rounded-xl pl-9 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sage focus:bg-white"
             />
           </div>
         </div>
+        {!isDateRangeValid && (
+          <p className="w-full text-[11px] font-semibold text-red-600">
+            {startDate > endDate ? 'Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.' : 'Khoảng báo cáo không được vượt quá 366 ngày.'}
+          </p>
+        )}
       </div>
 
-      <StateView isLoading={isLoading} isEmpty={wasteRecords.length === 0} isError={isError}>
+      <StateView isLoading={isLoading} isEmpty={isDateRangeValid && (wasteSummary?.recordCount ?? 0) === 0} isError={isError}>
         
         {/* KPI Mini Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
@@ -223,8 +242,8 @@ export default function ReportsPage() {
               <Package size={20} />
             </div>
             <div>
-              <span className="text-[10px] text-ink/50 uppercase font-bold block">Tổng lượng hao hụt</span>
-              <span className="text-lg font-mono font-bold text-ink">{totalQty.toFixed(1)} đơn vị</span>
+              <span className="text-[10px] text-ink/50 uppercase font-bold block">Nguyên liệu ảnh hưởng</span>
+              <span className="text-lg font-mono font-bold text-ink">{wasteSummary?.affectedIngredientCount ?? 0} loại</span>
             </div>
           </div>
 
@@ -234,7 +253,7 @@ export default function ReportsPage() {
             </div>
             <div>
               <span className="text-[10px] text-ink/50 uppercase font-bold block">Số lượt ghi nhận</span>
-              <span className="text-lg font-mono font-bold text-ink">{wasteRecords.length} giao dịch</span>
+              <span className="text-lg font-mono font-bold text-ink">{wasteSummary?.recordCount ?? 0} giao dịch</span>
             </div>
           </div>
         </div>
@@ -343,25 +362,22 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-ink/5 text-ink/80">
-                    {wasteRecords.map((log) => {
-                      const ing = ingredients.find((i) => i.id === log.ingredientId)
-                      return (
+                    {wasteRecords.map((log) => (
                         <tr key={log.id} className="hover:bg-ink/5">
                           <td className="py-2.5">
-                            <div className="font-semibold text-ink">{ing?.name ?? 'Nguyên liệu'}</div>
+                            <div className="font-semibold text-ink">{log.ingredientName}</div>
                             <div className="text-[9px] text-ink/50 font-mono">ID Lô: #{log.batchId || '-'}</div>
                           </td>
-                          <td className="py-2.5 text-right font-mono font-bold">{log.quantity} {ing?.unit}</td>
+                          <td className="py-2.5 text-right font-mono font-bold">{log.quantity} {log.ingredientUnit}</td>
                           <td className="py-2.5">
                             <span className="text-[10px] font-bold text-ink bg-ink/5 px-2 py-0.5 rounded">
-                              {reasonLabel[log.reason]}
+                              {reasonLabel[log.reason] ?? log.reason}
                             </span>
                           </td>
                           <td className="py-2.5 text-right font-semibold font-mono text-terracotta">{formatVND(log.estimatedCost)}</td>
                           <td className="py-2.5 text-center text-ink/50">{formatDate(log.createdAt.split('T')[0])}</td>
                         </tr>
-                      )
-                    })}
+                    ))}
                   </tbody>
                 </table>
                 <Pagination page={wastePage} totalPages={response?.data.totalPages ?? 0} totalElements={response?.data.totalElements ?? 0} onPageChange={setWastePage} />
@@ -377,7 +393,7 @@ export default function ReportsPage() {
           action={
             <span className="flex items-center gap-1 text-[11px] font-bold text-sage-dark uppercase bg-sage/10 px-2 py-0.5 rounded-full">
               <ClipboardText size={12} />
-              {auditLogs.length} dòng
+              {auditResponse?.data.totalElements ?? 0} dòng
             </span>
           }
         >

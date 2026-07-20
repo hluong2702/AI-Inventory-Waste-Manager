@@ -19,5 +19,7 @@ class CsvEscaperTest {
         assertThat(CsvEscaper.cell("+1")).isEqualTo("'+1");
         assertThat(CsvEscaper.cell("-1")).isEqualTo("'-1");
         assertThat(CsvEscaper.cell("@cmd")).isEqualTo("'@cmd");
+        assertThat(CsvEscaper.cell("  =SUM(A1:A2)")).isEqualTo("'  =SUM(A1:A2)");
+        assertThat(CsvEscaper.cell("\t=cmd|' /C calc'!A0")).isEqualTo("'\t=cmd|' /C calc'!A0");
     }
 }

@@ -385,12 +385,18 @@ Hệ thống phân chia chiến lược kiểm thử thành 2 mức độ chính
 
 ## 10. Các giới hạn đã biết & Nợ kỹ thuật (Known Limitations & Tech Debt)
 
-1.  **Sự không khớp tên vai trò giữa FE và BE**:
-    *   *Chi tiết*: Frontend dùng định nghĩa type `'STORE_OWNER'`, trong khi database và JWT payload của backend trả về giá trị `'OWNER'`.
-    *   *Biện pháp giải quyết*: Cần chỉnh sửa file định nghĩa type của Frontend tại [src/types/index.ts](file:///Users/hoangluong/Documents/AI%20Inventory%20&%20Waste%20Manager/src/types/index.ts) để đồng bộ hóa hoàn toàn về giá trị `'OWNER'`.
-2.  **Logic nghiệp vụ nằm tại Controller (Fat Controllers)**:
-    *   *Chi tiết*: `ReportController` và `AlertController` trực tiếp thực thi truy vấn dữ liệu và tính toán cấu trúc báo cáo mà không thông qua lớp Service trung gian.
-    *   *Biện pháp giải quyết*: Cần refactor tách toàn bộ mã xử lý nghiệp vụ báo cáo sang các class mới như `ReportService` và `AlertService` để đảm bảo kiến trúc sạch và dễ viết Unit Test.
-3.  **Tỷ lệ bao phủ kiểm thử thấp (Low Test Coverage)**:
-    *   *Chi tiết*: Hiện tại hệ thống mới chỉ có test cho module `insight` và `staff`. Hầu hết các luồng giao dịch kho cốt lõi đều chưa được bảo vệ bằng kiểm thử tự động.
-    *   *Biện pháp giải quyết*: Lên kế hoạch bổ sung tối thiểu 30 ca kiểm thử cho `InventoryService` và `SubscriptionService`.
+1.  **Ánh xạ tên vai trò là biên tương thích có chủ đích**:
+    *   Backend và database dùng `OWNER`; UI dùng nhãn nội bộ `STORE_OWNER`. `authService` thực hiện
+        ánh xạ tại một điểm duy nhất, còn `scripts/check-api-contract.mjs` kiểm tra enum backend
+        `Role` với type `BackendRole` để phát hiện drift trước khi merge.
+2.  **Controller đã được làm mỏng**:
+    *   Tổng hợp/xuất báo cáo nằm trong `ReportService`; sinh cảnh báo theo tenant nằm trong
+        `AlertGenerationService`. Controller và scheduler chỉ còn điều phối input, security context
+        và response/job lifecycle.
+3.  **Coverage được quản lý bằng quality gate**:
+    *   Backend có test cho inventory, subscription, security, report, alert và outbox. Frontend
+        áp ngưỡng coverage cho auth, guards, services, stores, utility và các component/trang trọng
+        yếu; Playwright bổ sung kiểm tra accessibility và performance budget.
+4.  **Bằng chứng hiệu năng production chưa đủ**:
+    *   Budget frontend được kiểm tra tự động, nhưng throughput, p95 API và uptime vẫn là mục tiêu
+        cần xác nhận bằng load test/staging telemetry trước khi công bố là kết quả thực tế.

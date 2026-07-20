@@ -6,9 +6,11 @@ import * as zod from 'zod'
 import apiClient from '../api/client'
 import type { ApiResponse, Store } from '../types'
 import { useAuth } from '../context/AuthContext'
+import { useStore } from '../context/StoreContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
 import StateView from '../components/StateView'
 import { Plus, Pencil, Trash, X, Storefront } from '@phosphor-icons/react'
+import { apiErrorMessage } from '../utils/apiResponse'
 
 // Validate schema
 const storeSchema = zod.object({
@@ -21,9 +23,11 @@ type StoreFormValues = zod.infer<typeof storeSchema>
 
 export default function StoresPage() {
   const { role } = useAuth()
+  const { activeStore } = useStore()
   const queryClient = useQueryClient()
   const [editingStore, setEditingStore] = useState<Store | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
   // 1. Tải danh sách cửa hàng
   const { data: response, isLoading, isError } = useQuery({
@@ -52,10 +56,12 @@ export default function StoresPage() {
     mutationFn: async (values: StoreFormValues) => {
       await apiClient.post('/stores', values)
     },
+    onMutate: () => setMutationError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] })
       closeModal()
-    }
+    },
+    onError: (error: unknown) => setMutationError(apiErrorMessage(error, 'Không thể tạo cửa hàng.')),
   })
 
   // 3. Mutation cập nhật cửa hàng
@@ -63,10 +69,12 @@ export default function StoresPage() {
     mutationFn: async (values: StoreFormValues & { id: number }) => {
       await apiClient.put(`/stores/${values.id}`, values)
     },
+    onMutate: () => setMutationError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] })
       closeModal()
-    }
+    },
+    onError: (error: unknown) => setMutationError(apiErrorMessage(error, 'Không thể cập nhật cửa hàng.')),
   })
 
   // 4. Mutation xóa cửa hàng
@@ -74,21 +82,25 @@ export default function StoresPage() {
     mutationFn: async (id: number) => {
       await apiClient.delete(`/stores/${id}`)
     },
+    onMutate: () => setMutationError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stores'] })
-    }
+    },
+    onError: (error: unknown) => setMutationError(apiErrorMessage(error, 'Không thể xóa cửa hàng.')),
   })
 
   function openCreateModal() {
+    setMutationError(null)
     setEditingStore(null)
     reset({ name: '', address: '', phone: '' })
     setIsModalOpen(true)
   }
 
   function openEditModal(store: Store) {
+    setMutationError(null)
     setEditingStore(store)
     setValue('name', store.name)
-    setValue('address', store.address)
+    setValue('address', store.address ?? '')
     setValue('phone', store.phone ?? '')
     setIsModalOpen(true)
   }
@@ -134,6 +146,12 @@ export default function StoresPage() {
         )}
       </div>
 
+      {mutationError && (
+        <div className="rounded-2xl border border-terracotta/20 bg-terracotta/10 p-4 text-sm font-semibold text-terracotta">
+          {mutationError}
+        </div>
+      )}
+
       <StateView isLoading={isLoading} isEmpty={stores.length === 0} isError={isError}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {stores.map((store) => (
@@ -153,8 +171,9 @@ export default function StoresPage() {
                     </button>
                     <button
                       onClick={() => handleDelete(store.id)}
-                      className="p-1.5 rounded-lg border border-terracotta/20 hover:bg-terracotta/5 text-terracotta transition-colors"
-                      title="Xóa cửa hàng"
+                      disabled={store.id === activeStore?.id}
+                      className="p-1.5 rounded-lg border border-terracotta/20 hover:bg-terracotta/5 text-terracotta transition-colors disabled:cursor-not-allowed disabled:opacity-35"
+                      title={store.id === activeStore?.id ? 'Hãy chuyển sang chi nhánh khác trước khi xóa' : 'Xóa cửa hàng'}
                     >
                       <Trash size={14} />
                     </button>
@@ -165,11 +184,11 @@ export default function StoresPage() {
               <div className="space-y-2.5 text-xs">
                 <div className="flex items-center gap-2 text-ink/80">
                   <span className="font-semibold text-ink w-20 shrink-0">Địa chỉ:</span>
-                  <span className="truncate">{store.address}</span>
+                  <span className="truncate">{store.address ?? 'Chưa cập nhật'}</span>
                 </div>
                 <div className="flex items-center gap-2 text-ink/80">
                   <span className="font-semibold text-ink w-20 shrink-0">Điện thoại:</span>
-                  <span>{store.phone}</span>
+                  <span>{store.phone ?? 'Chưa cập nhật'}</span>
                 </div>
               </div>
             </DoubleBezelCard>
@@ -196,6 +215,12 @@ export default function StoresPage() {
                   <X size={16} />
                 </button>
               </div>
+
+              {mutationError && (
+                <div className="mb-4 rounded-xl border border-terracotta/20 bg-terracotta/10 px-3 py-2 text-xs font-semibold text-terracotta">
+                  {mutationError}
+                </div>
+              )}
 
               <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
                 <div>

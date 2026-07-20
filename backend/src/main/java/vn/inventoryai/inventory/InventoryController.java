@@ -5,18 +5,24 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import vn.inventoryai.common.security.SecurityUtils;
 import vn.inventoryai.inventory.dto.InventoryInRequest;
 import vn.inventoryai.inventory.dto.InventoryBatchResponse;
 import vn.inventoryai.inventory.dto.InventoryOutRequest;
+import vn.inventoryai.inventory.dto.InventorySummaryResponse;
 import vn.inventoryai.inventory.dto.InventoryTransactionResponse;
 import vn.inventoryai.inventory.dto.CreateInventoryTransactionRequest;
 import vn.inventoryai.report.dto.StockTransactionResponse;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/inventory")
@@ -24,6 +30,7 @@ import java.util.Map;
 public class InventoryController {
     private final InventoryService inventoryService;
     private final InventoryBatchRepository batchRepository;
+    private final Clock clock;
 
     @PostMapping("/in")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
@@ -39,18 +46,56 @@ public class InventoryController {
 
     @GetMapping("/batches")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
-    Page<InventoryBatchResponse> batches(Pageable pageable) {
-        Long storeId = vn.inventoryai.common.security.SecurityUtils.storeId();
-        return batchRepository.findByStoreId(storeId, pageable)
+    Page<InventoryBatchResponse> batches(
+            @RequestParam(required = false) Long ingredientId,
+            Pageable pageable
+    ) {
+        Long storeId = SecurityUtils.storeId();
+        Pageable boundedPageable = boundedBatchPageable(pageable);
+        Page<InventoryBatch> batchPage = ingredientId == null
+                ? batchRepository.findByStoreIdAndQuantityGreaterThan(storeId, BigDecimal.ZERO, boundedPageable)
+                : batchRepository.findByStoreIdAndIngredientIdAndQuantityGreaterThan(
+                        storeId,
+                        ingredientId,
+                        BigDecimal.ZERO,
+                        boundedPageable
+                );
+        return batchPage
                 .map(batch -> new InventoryBatchResponse(
                         batch.getId(),
                         storeId,
                         batch.getIngredient().getId(),
+                        batch.getIngredient().getName(),
+                        batch.getIngredient().getUnit(),
+                        batch.getIngredient().getCategory(),
                         batch.getBatchNumber(),
                         batch.getQuantity(),
                         batch.getExpiryDate(),
                         batch.getReceivedAt(),
                         batch.getCostPerUnit()
+                ));
+    }
+
+    @GetMapping("/summary")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
+    Page<InventorySummaryResponse> summary(Pageable pageable) {
+        Long storeId = SecurityUtils.storeId();
+        LocalDate businessDate = LocalDate.now(clock);
+        Pageable boundedPageable = boundedSummaryPageable(pageable);
+        return batchRepository.summarizeInventory(storeId, businessDate, businessDate.plusDays(3), boundedPageable)
+                .map(row -> new InventorySummaryResponse(
+                        row.getIngredientId(),
+                        row.getCode(),
+                        row.getName(),
+                        row.getUnit(),
+                        row.getCategory(),
+                        row.getMinStock(),
+                        row.getMaxStock(),
+                        row.getTotalQuantity(),
+                        row.getSellableQuantity(),
+                        row.getActiveBatchesCount() == null ? 0 : row.getActiveBatchesCount(),
+                        row.getExpiredBatchesCount() == null ? 0 : row.getExpiredBatchesCount(),
+                        row.getExpiringSoonBatchesCount() == null ? 0 : row.getExpiringSoonBatchesCount()
                 ));
     }
 
@@ -60,25 +105,28 @@ public class InventoryController {
         return inventoryService.createTransaction(request);
     }
 
-    @PostMapping("/transactions/legacy")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER','STAFF')")
-    List<InventoryTransactionResponse> legacyCreateTransaction(@RequestBody Map<String, Object> payload) {
-        String type = String.valueOf(payload.get("type"));
-        Object rawItems = payload.get("items");
-        if (!(rawItems instanceof List<?> items)) {
-            return List.of();
+    private Pageable boundedSummaryPageable(Pageable requested) {
+        int page = requested.isPaged() ? Math.max(requested.getPageNumber(), 0) : 0;
+        int size = requested.isPaged() ? Math.min(Math.max(requested.getPageSize(), 1), 100) : 20;
+        return PageRequest.of(page, size);
+    }
+
+    private Pageable boundedBatchPageable(Pageable requested) {
+        int page = requested.isPaged() ? Math.max(requested.getPageNumber(), 0) : 0;
+        int size = requested.isPaged() ? Math.min(Math.max(requested.getPageSize(), 1), 100) : 20;
+        Set<String> allowedProperties = Set.of("expiryDate", "receivedAt", "batchNumber", "quantity", "id");
+        List<Sort.Order> orders = new ArrayList<>();
+        requested.getSort().forEach(order -> {
+            if (allowedProperties.contains(order.getProperty())) {
+                orders.add(order);
+            }
+        });
+        if (orders.isEmpty()) {
+            orders.add(Sort.Order.asc("expiryDate"));
         }
-        return items.stream()
-                .flatMap(item -> {
-                    Map<?, ?> map = (Map<?, ?>) item;
-                    Long ingredientId = ((Number) map.get("ingredientId")).longValue();
-                    BigDecimal quantity = new BigDecimal(String.valueOf(map.get("quantity")));
-                    if ("IMPORT".equals(type)) {
-                        LocalDate expiredDate = LocalDate.parse(String.valueOf(map.get("expiredDate")));
-                        return java.util.stream.Stream.of(in(new InventoryInRequest(ingredientId, quantity, expiredDate)));
-                    }
-                    return out(new InventoryOutRequest(ingredientId, quantity)).stream();
-                })
-                .toList();
+        if (orders.stream().noneMatch(order -> order.getProperty().equals("id"))) {
+            orders.add(Sort.Order.asc("id"));
+        }
+        return PageRequest.of(page, size, Sort.by(orders));
     }
 }

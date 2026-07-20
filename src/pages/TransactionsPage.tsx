@@ -1,18 +1,28 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import type { ApiResponse, Ingredient, StockTransaction, InventoryBatch, PageResponse } from '../types'
+import type {
+  ApiResponse,
+  CreateInventoryTransactionRequest,
+  Ingredient,
+  InventoryTransactionReason,
+  InventoryTransactionType,
+  PageResponse,
+  StockTransaction,
+  WasteReason,
+} from '../types'
 import Pagination from '../components/Pagination'
 import { useStore } from '../context/StoreContext'
 import { useAuth } from '../context/AuthContext'
 import DoubleBezelCard from '../components/DoubleBezelCard'
 import StateView from '../components/StateView'
 import { formatVND, formatDate } from '../utils/fefo'
+import { apiErrorMessage } from '../utils/apiResponse'
 import { Plus, Trash, ArrowUp, ArrowDown, ListDashes, Info } from '@phosphor-icons/react'
 
 export default function TransactionsPage() {
   const { activeStore } = useStore()
-  const { username } = useAuth()
+  const { role } = useAuth()
   const queryClient = useQueryClient()
   
   // Tab hiện tại: 'history' | 'create'
@@ -20,9 +30,9 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(0)
 
   // Form State cho phiếu giao dịch mới
-  const [txType, setTxType] = useState<'IMPORT' | 'EXPORT'>('IMPORT')
-  const [txReason, setTxReason] = useState<string>('IMPORT_NEW')
-  const [wasteReason, setWasteReason] = useState<'EXPIRED' | 'DAMAGED' | 'PREP_ERROR' | 'OTHER'>('EXPIRED')
+  const [txType, setTxType] = useState<InventoryTransactionType>('IMPORT')
+  const [txReason, setTxReason] = useState<InventoryTransactionReason>('IMPORT_NEW')
+  const [wasteReason, setWasteReason] = useState<WasteReason>('EXPIRED')
   
   // Danh sách nguyên liệu trong phiếu hiện tại
   interface FormItem {
@@ -41,7 +51,7 @@ export default function TransactionsPage() {
 
   // 1. Tải danh sách nguyên liệu hoạt động
   const { data: ingResponse } = useQuery({
-    queryKey: ['ingredients'],
+    queryKey: ['ingredients', activeStore?.id],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<Ingredient[]>>('/ingredients')
       return res.data
@@ -49,17 +59,7 @@ export default function TransactionsPage() {
   })
   const ingredients = ingResponse?.data ?? []
 
-  // 2. Tải danh sách lô hàng trong kho (để xem tồn kho hiện tại)
-  const { data: batchesResponse } = useQuery({
-    queryKey: ['batches'],
-    queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<PageResponse<InventoryBatch>>>('/inventory/batches?page=0&size=100&sort=expiryDate,asc')
-      return res.data
-    }
-  })
-  const batches = batchesResponse?.data.content ?? []
-
-  // 3. Tải lịch sử giao dịch
+  // 2. Tải lịch sử giao dịch
   const { data: txResponse, isLoading: isLoadingTxs, isError } = useQuery({
     queryKey: ['transactions', activeStore?.id, page],
     queryFn: async () => {
@@ -70,9 +70,9 @@ export default function TransactionsPage() {
   })
   const transactions = txResponse?.data.content ?? []
 
-  // 4. Mutation gửi phiếu giao dịch lên backend
+  // 3. Mutation gửi phiếu giao dịch lên backend
   const createTxMutation = useMutation({
-    mutationFn: async (payload: any) => {
+    mutationFn: async (payload: CreateInventoryTransactionRequest) => {
       await apiClient.post('/inventory/transactions', payload)
     },
     onSuccess: () => {
@@ -92,8 +92,8 @@ export default function TransactionsPage() {
         setFormSuccess(null)
       }, 1500)
     },
-    onError: (err: any) => {
-      setFormError(err.response?.data?.message || err.message || 'Lỗi xử lý giao dịch.')
+    onError: (error: unknown) => {
+      setFormError(apiErrorMessage(error, 'Lỗi xử lý giao dịch.'))
     }
   })
 
@@ -109,17 +109,10 @@ export default function TransactionsPage() {
   }
 
   // Cập nhật giá trị một cột của dòng cụ thể
-  function updateFormItem(idx: number, field: keyof FormItem, val: any) {
+  function updateFormItem<Key extends keyof FormItem>(idx: number, field: Key, val: FormItem[Key]) {
     const updated = [...formItems]
     updated[idx] = { ...updated[idx], [field]: val }
     
-    // Tự sinh mã lô gợi ý khi chọn nguyên liệu (IMPORT)
-    if (field === 'ingredientId' && txType === 'IMPORT') {
-      const ing = ingredients.find(i => i.id === Number(val))
-      if (ing) {
-        updated[idx].batchNumber = `LOT-${ing.code}-${new Date().toISOString().split('T')[0].replace(/-/g, '')}`
-      }
-    }
     setFormItems(updated)
   }
 
@@ -137,36 +130,20 @@ export default function TransactionsPage() {
     }
 
     if (txType === 'IMPORT') {
-      const missingBatchOrDate = formItems.find(item => !item.batchNumber || !item.expiredDate)
-      if (missingBatchOrDate) {
-        setFormError('Giao dịch nhập kho yêu cầu điền đầy đủ Số lô và Ngày hết hạn.')
+      const missingExpiryDate = formItems.find(item => !item.expiredDate)
+      if (missingExpiryDate) {
+        setFormError('Giao dịch nhập kho yêu cầu ngày hết hạn cho mọi nguyên liệu.')
         return
       }
     }
 
-    // Kiểm tra xem có xuất kho âm hay không trước khi gửi (Client-side fast validation)
-    if (txType === 'EXPORT') {
-      for (const item of formItems) {
-        const totalStock = batches
-          .filter(b => b.ingredientId === item.ingredientId)
-          .reduce((sum, b) => sum + b.quantity, 0)
-        
-        if (totalStock < item.quantity) {
-          const ing = ingredients.find(i => i.id === item.ingredientId)
-          setFormError(`Không đủ tồn kho cho nguyên liệu "${ing?.name}". Hiện tại chỉ còn ${totalStock} ${ing?.unit} khả dụng.`);
-          return
-        }
-      }
-    }
-
-    const payload = {
+    const payload: CreateInventoryTransactionRequest = {
       type: txType,
       reason: txReason,
-      recordedBy: username || 'staff',
       wasteReason: txReason === 'EXPORT_WASTE' ? wasteReason : undefined,
       items: formItems.map(item => ({
         ingredientId: item.ingredientId,
-        batchNumber: txType === 'IMPORT' ? item.batchNumber : undefined,
+        batchNumber: txType === 'IMPORT' && item.batchNumber.trim() ? item.batchNumber.trim() : undefined,
         quantity: item.quantity,
         expiredDate: txType === 'IMPORT' ? item.expiredDate : undefined,
         costPerUnit: txType === 'IMPORT' ? item.costPerUnit : undefined
@@ -177,7 +154,7 @@ export default function TransactionsPage() {
   }
 
   // Khi thay đổi Type (Nhập/Xuất), reset lại các reason tương ứng
-  function handleTypeChange(type: 'IMPORT' | 'EXPORT') {
+  function handleTypeChange(type: InventoryTransactionType) {
     setTxType(type)
     setTxReason(type === 'IMPORT' ? 'IMPORT_NEW' : 'EXPORT_CONSUME')
   }
@@ -341,7 +318,7 @@ export default function TransactionsPage() {
                   <label className="block text-xs font-bold text-ink mb-1.5">Lý do giao dịch</label>
                   <select
                     value={txReason}
-                    onChange={(e) => setTxReason(e.target.value)}
+                    onChange={(e) => setTxReason(e.target.value as InventoryTransactionReason)}
                     className="w-full bg-white border border-ink/10 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sage"
                   >
                     {txType === 'IMPORT' ? (
@@ -349,8 +326,12 @@ export default function TransactionsPage() {
                     ) : (
                       <>
                         <option value="EXPORT_CONSUME">Xuất tiêu hao chế biến bán hàng</option>
-                        <option value="EXPORT_WASTE">Báo hủy lãng phí (hết hạn, hỏng...)</option>
-                        <option value="EXPORT_ADJUST">Điều chỉnh cân đối kho</option>
+                        {role !== 'STAFF' && (
+                          <>
+                            <option value="EXPORT_WASTE">Báo hủy lãng phí (hết hạn, hỏng...)</option>
+                            <option value="EXPORT_ADJUST">Điều chỉnh cân đối kho</option>
+                          </>
+                        )}
                       </>
                     )}
                   </select>
@@ -361,7 +342,7 @@ export default function TransactionsPage() {
                     <label className="block text-xs font-bold text-ink mb-1.5">Lý do hủy nguyên liệu</label>
                     <select
                       value={wasteReason}
-                      onChange={(e) => setWasteReason(e.target.value as any)}
+                      onChange={(e) => setWasteReason(e.target.value as WasteReason)}
                       className="w-full bg-white border border-ink/10 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sage"
                     >
                       <option value="EXPIRED">Quá hạn sử dụng</option>
@@ -421,7 +402,7 @@ export default function TransactionsPage() {
                       <>
                         {/* Số lô */}
                         <div className="md:col-span-2">
-                          <label className="block text-[10px] font-semibold text-ink/70 mb-1">Số lô hàng</label>
+                          <label className="block text-[10px] font-semibold text-ink/70 mb-1">Số lô hàng (tùy chọn)</label>
                           <input
                             type="text"
                             placeholder="LOT-XXX"
@@ -455,18 +436,12 @@ export default function TransactionsPage() {
                         </div>
                       </>
                     ) : (
-                      // Hiển thị thông tin tồn kho khả dụng để nhân viên biết
-                      <div className="md:col-span-6 flex items-center h-9 pl-2 text-xs text-ink/60">
-                        {item.ingredientId > 0 && (
-                          <span>
-                            Tồn kho khả dụng: <span className="font-bold font-mono text-ink">
-                              {batches
-                                .filter(b => b.ingredientId === item.ingredientId)
-                                .reduce((sum, b) => sum + b.quantity, 0)}
-                            </span> {ingredients.find(i => i.id === item.ingredientId)?.unit}
-                          </span>
-                        )}
-                      </div>
+                          // Backend khóa lô và kiểm tra tổng tồn khả dụng trong transaction.
+                          <div className="md:col-span-6 flex items-center h-9 pl-2 text-xs text-ink/60">
+                            {item.ingredientId > 0 && (
+                              <span>Tồn khả dụng sẽ được xác minh theo FEFO khi gửi phiếu.</span>
+                            )}
+                          </div>
                     )}
 
                     {/* Nút xóa dòng */}

@@ -5,8 +5,10 @@ import java.util.List;
 
 public record PosSalesImportResult(
         String provider,
-        int rowsImported,
+        String mode,
+        int rowsParsed,
         BigDecimal totalRevenue,
+        boolean persisted,
         List<String> warnings
 ) {
 }

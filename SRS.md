@@ -294,10 +294,16 @@ Hệ thống định nghĩa 4 cấp vai trò thực tế như sau:
 
 ## 5. Yêu cầu phi chức năng (Non-Functional Requirements)
 
+Các ngưỡng dưới đây là **mục tiêu nghiệm thu**, không phải số liệu production đã đạt. Mỗi lần công
+bố kết quả phải đính kèm môi trường, tập dữ liệu, cấu hình tải, thời điểm đo và artifact báo cáo.
+
 ### 5.1 Hiệu năng hệ thống (Performance)
 *   **NFR-01 (Thời gian phản hồi)**: 95% số request API nghiệp vụ cơ bản (Xem danh sách nguyên liệu, lịch sử giao dịch) phải có thời gian phản hồi dưới **200ms**. Các API liên quan đến thuật toán phức tạp như Dự báo đặt hàng hoặc Phân tích lãng phí sâu phải phản hồi dưới **800ms** trong điều kiện tải thường.
 *   **NFR-02 (Thời gian tải trang)**: Giao diện người dùng phải hiển thị khung bố cục chính (First Contentful Paint) trong vòng dưới **1.5 giây**.
 *   **NFR-03 (Khả năng xử lý đồng thời)**: Backend phải đáp ứng tối thiểu **1000 requests/giây** mà không làm tăng tỷ lệ lỗi quá 0.1%.
+*   **Bằng chứng nghiệm thu NFR-01..03**: chạy production build trên staging; Playwright kiểm tra
+    budget phía client, công cụ load test kiểm tra p95/throughput/error rate phía API. Chủ sở hữu:
+    Backend/Platform; tần suất: trước mỗi production release có thay đổi đường dữ liệu chính.
 
 ### 5.2 An toàn bảo mật (Security)
 *   **NFR-04 (Mã hóa mật khẩu)**: 100% mật khẩu lưu trữ trong CSDL phải được mã hóa bằng thuật toán **BCrypt** với độ phức tạp (Strength) là 10. Tuyệt đối không lưu mật khẩu dạng văn bản thô.
@@ -311,6 +317,9 @@ Hệ thống định nghĩa 4 cấp vai trò thực tế như sau:
 ### 5.4 Tính tin cậy và khả dụng (Reliability & Availability)
 *   **NFR-09 (Độ khả dụng hệ thống)**: Hệ thống phải đảm bảo thời gian hoạt động liên tục (Uptime) đạt tối thiểu **99.9%** mỗi năm (tương đương tổng thời gian gián đoạn hệ thống không mong muốn không vượt quá 8.76 giờ/năm).
 *   **NFR-10 (Tính toàn vẹn dữ liệu)**: Các giao dịch nhập/xuất kho phải sử dụng cơ chế transaction của JPA/Hibernate để đảm bảo tính toàn vẹn dữ liệu (ACID). Nếu xảy ra lỗi giữa chừng, toàn bộ các bước trong giao dịch xuất kho FEFO phải được rollback về trạng thái ban đầu.
+*   **Bằng chứng nghiệm thu NFR-09..10**: uptime được tính từ health probe/monitoring production;
+    toàn vẹn dữ liệu được xác nhận bằng integration test MySQL/Flyway và test rollback. Không suy
+    diễn uptime từ unit test hoặc một lần chạy local.
 
 ### 5.5 Khả năng sử dụng (Usability)
 *   **NFR-11 (Đơn giản và trực quan)**: Người dùng phổ thông (Nhân viên kho) phải có khả năng hoàn thành một quy trình nhập kho hoặc xuất kho trong vòng dưới 3 lượt click chuột.

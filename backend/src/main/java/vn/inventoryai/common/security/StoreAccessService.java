@@ -1,33 +1,40 @@
 package vn.inventoryai.common.security;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import vn.inventoryai.auth.TenantMembershipRepository;
 import vn.inventoryai.common.enums.Role;
+import vn.inventoryai.common.enums.StoreStatus;
+import vn.inventoryai.common.enums.UserStatus;
 import vn.inventoryai.common.error.AppException;
 import vn.inventoryai.common.error.ErrorCode;
-import vn.inventoryai.store.StoreRepository;
+
+import java.util.Objects;
 
 @Service("storeAccess")
+@RequiredArgsConstructor
 public class StoreAccessService {
-    private final StoreRepository storeRepository;
-
-    public StoreAccessService(StoreRepository storeRepository) {
-        this.storeRepository = storeRepository;
-    }
+    private final TenantMembershipRepository membershipRepository;
 
     public boolean canAccessStore(Long storeId) {
+        if (storeId == null) return false;
         UserPrincipal principal = SecurityUtils.principal();
-        if (principal.role() == Role.SYSTEM_ADMIN || (principal.storeId() != null && principal.storeId().equals(storeId))) {
-            return true;
+        if (principal.role() == Role.SYSTEM_ADMIN || !Objects.equals(SecurityUtils.storeId(), storeId)) {
+            return false;
         }
-        return storeRepository.findById(storeId)
-                .map(store -> store.getOwner() != null && store.getOwner().getId().equals(principal.userId()))
-                .orElse(false);
+        return membershipRepository.existsByUserIdAndStoreIdAndStatusAndStoreStatus(
+                principal.userId(), storeId, UserStatus.ACTIVE, StoreStatus.ACTIVE
+        );
     }
 
     public void assertCurrentStore(Long storeId) {
         if (!canAccessStore(storeId)) {
-            throw new AppException(ErrorCode.STORE_MISMATCH, HttpStatus.FORBIDDEN, "storeId does not match JWT storeId");
+            throw new AppException(
+                    ErrorCode.STORE_MISMATCH,
+                    HttpStatus.FORBIDDEN,
+                    "Store is not the authenticated active tenant"
+            );
         }
     }
 }

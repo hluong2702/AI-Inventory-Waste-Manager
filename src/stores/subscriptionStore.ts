@@ -11,6 +11,7 @@ interface SubscriptionState {
   setEntitlements: (entitlements: BillingEntitlements) => void
   setLimitBanner: (message: string | null) => void
   isAtLimit: (kind: keyof SubscriptionLimits, currentCount: number) => boolean
+  reset: () => void
 }
 
 export const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
@@ -24,12 +25,18 @@ export const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
   setPlan: (plan, expiresAt) => {
     localStorage.setItem('subscriptionPlan', plan)
     if (expiresAt) localStorage.setItem('subscriptionExpiresAt', expiresAt)
-    set({ current: { plan, expiresAt, limits: get().current.limits } })
+    else localStorage.removeItem('subscriptionExpiresAt')
+    set({
+      current: { plan, expiresAt, limits: UNKNOWN_LIMITS },
+      entitlements: null,
+      limitBanner: null,
+    })
   },
   setEntitlements: (entitlements) => {
-    const expiresAt = entitlements.expiresAt
+    const expiresAt = entitlements.expiresAt ?? undefined
     localStorage.setItem('subscriptionPlan', entitlements.plan)
     if (expiresAt) localStorage.setItem('subscriptionExpiresAt', expiresAt)
+    else localStorage.removeItem('subscriptionExpiresAt')
     set({
       entitlements,
       current: {
@@ -43,5 +50,15 @@ export const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
   isAtLimit: (kind, currentCount) => {
     const limit = get().current.limits[kind]
     return typeof limit === 'number' && currentCount >= limit
+  },
+  reset: () => {
+    localStorage.removeItem('subscriptionPlan')
+    localStorage.removeItem('subscriptionExpiresAt')
+    localStorage.removeItem('pendingUpgradePlan')
+    set({
+      current: { plan: 'FREE', limits: UNKNOWN_LIMITS },
+      entitlements: null,
+      limitBanner: null,
+    })
   },
 }))
